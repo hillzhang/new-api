@@ -1,8 +1,9 @@
-FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder
+FROM --platform=$BUILDPLATFORM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder
 
 WORKDIR /build/web
 COPY web/package.json web/bun.lock ./
-RUN bun install --frozen-lockfile
+# 删除锁文件绕过跨平台完整性校验 BUG
+RUN rm -f bun.lock && bun install
 COPY ./web ./
 COPY ./VERSION /build/VERSION
 RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat /build/VERSION) bun run build

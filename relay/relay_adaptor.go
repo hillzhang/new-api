@@ -42,6 +42,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/suno"
 	taskvertex "github.com/QuantumNous/new-api/relay/channel/task/vertex"
 	taskVidu "github.com/QuantumNous/new-api/relay/channel/task/vidu"
+	taskwangsu "github.com/QuantumNous/new-api/relay/channel/task/wangsu"
 	"github.com/QuantumNous/new-api/relay/channel/tencent"
 	"github.com/QuantumNous/new-api/relay/channel/vertex"
 	"github.com/QuantumNous/new-api/relay/channel/volcengine"
@@ -126,6 +127,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &advancedcustom.Adaptor{}
 	case constant.APITypeSub2API:
 		return &sub2api.Adaptor{}
+	case constant.APITypeWangsu:
+		return &openai.Adaptor{}
 	}
 	return nil
 }
@@ -165,6 +168,8 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 			return &taskGemini.TaskAdaptor{}
 		case constant.ChannelTypeMiniMax:
 			return &hailuo.TaskAdaptor{}
+		case constant.ChannelTypeWangsu:
+			return &taskwangsu.TaskAdaptor{}
 		}
 	}
 	return nil

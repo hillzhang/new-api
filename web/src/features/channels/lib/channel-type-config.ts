@@ -154,6 +154,17 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models fetched from upstream /v1/models',
     },
   },
+  60: {
+    id: 60,
+    name: CHANNEL_TYPES[60],
+    icon: 'wangsu',
+    defaultBaseUrl: 'https://api.edgecloudapp.com/v2/llm',
+    hints: {
+      baseUrl: 'Default: https://api.edgecloudapp.com/v2/llm',
+      key: 'Wangsu API Key',
+      models: 'sora-2, MiniMax-Hailuo-2.3, etc.',
+    },
+  },
 }
 
 /**
