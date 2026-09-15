@@ -441,6 +441,60 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 	_ = resp.Body.Close()
 
+	// ====================【gemini-*-image 适配 3/3: 响应体解析与 Token 精准计费】====================
+	// Google 传统的 Imagen 模型响应结构为 dto.GeminiImageResponse (包含 predictions 数组)；
+	// 而 Gemini 多模态原生生图模型（如 gemini-3.1-flash-image）响应结构为 dto.GeminiChatResponse。
+	// 下方针对非 Imagen 模型做专门解析与 OpenAI 规范的转换：
+	if !strings.HasPrefix(info.UpstreamModelName, "imagen") {
+		var chatResponse dto.GeminiChatResponse
+		if err := common.Unmarshal(responseBody, &chatResponse); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+
+		// 1. 安全拦截检查：若被 Google 官方安全策略（SAFETY / PROHIBITED_CONTENT 等）拦截，捕获 BlockReason 并记录
+		if len(chatResponse.Candidates) == 0 && chatResponse.PromptFeedback != nil && chatResponse.PromptFeedback.BlockReason != nil {
+			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *chatResponse.PromptFeedback.BlockReason))
+			return nil, types.NewOpenAIError(errors.New("request blocked by Gemini API: "+*chatResponse.PromptFeedback.BlockReason), types.ErrorCodePromptBlocked, http.StatusBadRequest)
+		}
+
+		// 2. 数据格式转换：构建标准的 OpenAI 格式生图响应 (dto.ImageResponse)
+		openAIResponse := dto.ImageResponse{
+			Created: common.GetTimestamp(),
+			Data:    make([]dto.ImageData, 0),
+		}
+
+		// 遍历 candidates[].content.parts[]，提取 inlineData.Data 中的 Base64 编码图片数据
+		for _, candidate := range chatResponse.Candidates {
+			for _, part := range candidate.Content.Parts {
+				if part.InlineData != nil && part.InlineData.Data != "" {
+					openAIResponse.Data = append(openAIResponse.Data, dto.ImageData{
+						B64Json: part.InlineData.Data,
+					})
+				}
+			}
+		}
+
+		if len(openAIResponse.Data) == 0 {
+			return nil, types.NewOpenAIError(errors.New("no images generated"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+
+		jsonResponse, jsonErr := common.Marshal(openAIResponse)
+		if jsonErr != nil {
+			return nil, types.NewError(jsonErr, types.ErrorCodeBadResponseBody)
+		}
+
+		// 3. 将 OpenAI 规范的 JSON 响应写回客户端（前端/SaaS 即可直接读取 b64_json 渲染或下载）
+		c.Writer.Header().Set("Content-Type", "application/json")
+		c.Writer.WriteHeader(resp.StatusCode)
+		_, _ = c.Writer.Write(jsonResponse)
+
+		// 4. 精准 Token 计费：复用 buildUsageFromGeminiResponse 函数，自动解析 Google 原生返回的
+		// usageMetadata（包含 PromptTokens + 输出端纯图片 1120 tokens），完成 NewAPI 配额扣减
+		usage := buildUsageFromGeminiResponse(c, info, &chatResponse)
+		return &usage, nil
+	}
+	// ==============================================================================================
+
 	var geminiResponse dto.GeminiImageResponse
 	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
 		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)

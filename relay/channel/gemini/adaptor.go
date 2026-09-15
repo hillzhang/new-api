@@ -61,9 +61,38 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	if !strings.HasPrefix(info.UpstreamModelName, "imagen") {
-		return nil, errors.New("not supported model for image generation, only imagen models are supported")
+	// ====================【gemini-*-image 适配 1/3: 请求模型判定与协议转换】====================
+	// 背景：前端/SaaS 客户端通过 /v1/images/generations 发起生图请求。
+	// 原版 NewAPI 仅允许 "imagen" 开头的模型生图，这里扩展支持 "gemini-*-image"（如 gemini-3.1-flash-image）
+	isImagen := strings.HasPrefix(info.UpstreamModelName, "imagen")
+	isGeminiImage := strings.Contains(info.UpstreamModelName, "-image") ||
+		model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName)
+
+	if !isImagen && !isGeminiImage {
+		return nil, errors.New("not supported model for image generation, only imagen and gemini-*-image models are supported")
 	}
+
+	// 协议转换：若为 Gemini 对话生图模型（非传统 imagen），将 OpenAI 的 dto.ImageRequest 转换为
+	// Gemini 原生支持的 dto.GeminiChatRequest，并显式指定 ResponseModalities: ["IMAGE"]，触发上游纯图片生成
+	if isGeminiImage && !isImagen {
+		geminiRequest := dto.GeminiChatRequest{
+			Contents: []dto.GeminiChatContent{
+				{
+					Role: "user",
+					Parts: []dto.GeminiPart{
+						{
+							Text: request.Prompt,
+						},
+					},
+				},
+			},
+			GenerationConfig: dto.GeminiChatGenerationConfig{
+				ResponseModalities: []string{"IMAGE"},
+			},
+		}
+		return geminiRequest, nil
+	}
+	// =====================================================================================
 
 	// convert size to aspect ratio but allow user to specify aspect ratio
 	aspectRatio := "1:1" // default aspect ratio
@@ -274,9 +303,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		}
 	}
 
-	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
+	// ====================【gemini-*-image 适配 2/3: 响应路由分流】====================
+	// 无论模型名字叫什么，只要是 OpenAI 规范的生图请求（RelayModeImagesGenerations、RelayModeImagesEdits）
+	// 或者是传统的 Google Imagen 系列模型，统一路由至 GeminiImageHandler 处理
+	if info.RelayMode == constant.RelayModeImagesGenerations || info.RelayMode == constant.RelayModeImagesEdits || strings.HasPrefix(info.UpstreamModelName, "imagen") {
 		return GeminiImageHandler(c, info, resp)
 	}
+	// =================================================================================
 
 	// check if the model is an embedding model
 	if strings.HasPrefix(info.UpstreamModelName, "text-embedding") ||
