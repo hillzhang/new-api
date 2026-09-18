@@ -475,28 +475,43 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			}
 		}
 
-		if mf != nil && mf.File != nil {
-			// Check if "image" field exists in any form, including array notation
+		if mf != nil {
+			// Check if "image" field exists in file form, including array notation
 			var imageFiles []*multipart.FileHeader
 			var exists bool
 
-			// First check for standard "image" field
-			if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
-				// If not found, check for "image[]" field
-				if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
-					// If still not found, iterate through all fields to find any that start with "image["
-					foundArrayImages := false
-					for fieldName, files := range mf.File {
-						if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
-							foundArrayImages = true
-							imageFiles = append(imageFiles, files...)
+			if mf.File != nil {
+				// First check for standard "image" field
+				if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
+					// If not found, check for "image[]" field
+					if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
+						// If still not found, iterate through all fields to find any that start with "image["
+						for fieldName, files := range mf.File {
+							if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
+								imageFiles = append(imageFiles, files...)
+							}
 						}
 					}
+				}
+			}
 
-					// If no image fields found at all
-					if !foundArrayImages && (len(imageFiles) == 0) {
-						return nil, errors.New("image is required")
+			// If no image files found in mf.File, check if image was provided as a text/URL field in mf.Value
+			if len(imageFiles) == 0 {
+				hasValueImage := false
+				if mf.Value != nil {
+					if len(mf.Value["image"]) > 0 || len(mf.Value["image[]"]) > 0 {
+						hasValueImage = true
+					} else {
+						for k := range mf.Value {
+							if strings.HasPrefix(k, "image[") && len(mf.Value[k]) > 0 {
+								hasValueImage = true
+								break
+							}
+						}
 					}
+				}
+				if !hasValueImage {
+					return nil, errors.New("image is required")
 				}
 			}
 
@@ -535,30 +550,32 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			}
 
 			// Handle mask file if present
-			if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
-				maskFile, err := maskFiles[0].Open()
-				if err != nil {
-					return nil, errors.New("failed to open mask file")
+			if mf.File != nil {
+				if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
+					maskFile, err := maskFiles[0].Open()
+					if err != nil {
+						return nil, errors.New("failed to open mask file")
+					}
+					// 复制完立即关闭，避免在循环内使用 defer 占用资源
+
+					// Determine MIME type for mask file
+					mimeType := detectImageMimeType(maskFiles[0].Filename)
+
+					// Create a form file with the appropriate content type
+					h := make(textproto.MIMEHeader)
+					h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="mask"; filename="%s"`, maskFiles[0].Filename))
+					h.Set("Content-Type", mimeType)
+
+					maskPart, err := writer.CreatePart(h)
+					if err != nil {
+						return nil, errors.New("create form file failed for mask")
+					}
+
+					if _, err := io.Copy(maskPart, maskFile); err != nil {
+						return nil, errors.New("copy mask file failed")
+					}
+					_ = maskFile.Close()
 				}
-				// 复制完立即关闭，避免在循环内使用 defer 占用资源
-
-				// Determine MIME type for mask file
-				mimeType := detectImageMimeType(maskFiles[0].Filename)
-
-				// Create a form file with the appropriate content type
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="mask"; filename="%s"`, maskFiles[0].Filename))
-				h.Set("Content-Type", mimeType)
-
-				maskPart, err := writer.CreatePart(h)
-				if err != nil {
-					return nil, errors.New("create form file failed for mask")
-				}
-
-				if _, err := io.Copy(maskPart, maskFile); err != nil {
-					return nil, errors.New("copy mask file failed")
-				}
-				_ = maskFile.Close()
 			}
 		} else {
 			return nil, errors.New("no multipart form data found")

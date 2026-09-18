@@ -96,3 +96,42 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		convertAndReplay(t, c, prompt)
 	})
 }
+
+func TestConvertImageEditRequestWithImageURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "gpt-image-2.5-flare"))
+	require.NoError(t, writer.WriteField("prompt", "a cat"))
+	require.NoError(t, writer.WriteField("image", "https://example.com/cat.png"))
+	require.NoError(t, writer.WriteField("mask", "https://example.com/mask.png"))
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	require.NoError(t, c.Request.ParseMultipartForm(32<<20))
+
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeImagesEdits,
+	}
+	request := dto.ImageRequest{
+		Model:  "gpt-image-2.5-flare",
+		Prompt: "a cat",
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	convertedBody, ok := converted.(*bytes.Buffer)
+	require.True(t, ok)
+
+	replayedRequest := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(convertedBody.Bytes()))
+	replayedRequest.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	require.NoError(t, replayedRequest.ParseMultipartForm(32<<20))
+
+	require.Equal(t, "gpt-image-2.5-flare", replayedRequest.PostForm.Get("model"))
+	require.Equal(t, "a cat", replayedRequest.PostForm.Get("prompt"))
+	require.Equal(t, "https://example.com/cat.png", replayedRequest.PostForm.Get("image"))
+	require.Equal(t, "https://example.com/mask.png", replayedRequest.PostForm.Get("mask"))
+}

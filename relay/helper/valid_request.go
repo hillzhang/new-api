@@ -213,10 +213,28 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			if imageValue := formData.Get("image"); imageValue != "" {
 				imageRequest.Image, _ = common.Marshal(imageValue)
 			}
+			if maskValue := formData.Get("mask"); maskValue != "" {
+				imageRequest.Mask, _ = common.Marshal(maskValue)
+			}
+			if bgValue := formData.Get("background"); bgValue != "" {
+				imageRequest.Background, _ = common.Marshal(bgValue)
+			}
+			if formatValue := formData.Get("output_format"); formatValue != "" {
+				imageRequest.OutputFormat, _ = common.Marshal(formatValue)
+			}
+			if compressionValue := formData.Get("output_compression"); compressionValue != "" {
+				imageRequest.OutputCompression, _ = common.Marshal(compressionValue)
+			}
+			if partialValue := formData.Get("partial_images"); partialValue != "" {
+				imageRequest.PartialImages, _ = common.Marshal(partialValue)
+			}
+			if moderationValue := formData.Get("moderation"); moderationValue != "" {
+				imageRequest.Moderation, _ = common.Marshal(moderationValue)
+			}
 
-			if imageRequest.Model == "gpt-image-1" {
+			if strings.HasPrefix(imageRequest.Model, "gpt-image") {
 				if imageRequest.Quality == "" {
-					imageRequest.Quality = "standard"
+					imageRequest.Quality = "auto"
 				}
 			}
 			if imageRequest.N == nil || *imageRequest.N == 0 {
@@ -268,7 +286,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			if imageRequest.Size == "" {
 				imageRequest.Size = "1024x1024"
 			}
-		} else if imageRequest.Model == "gpt-image-1" {
+		} else if strings.HasPrefix(imageRequest.Model, "gpt-image") {
 			if imageRequest.Quality == "" {
 				imageRequest.Quality = "auto"
 			}

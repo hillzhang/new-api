@@ -176,3 +176,99 @@ func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {
 	info.InitChannelMeta(ctx)
 	assert.Equal(t, "max", info.ReasoningEffort)
 }
+
+func TestTaskSubmitReq_UnmarshalJSON_Seconds(t *testing.T) {
+	tests := []struct {
+		name         string
+		jsonBody     string
+		expectedSec  string
+		expectedDur  int
+	}{
+		{
+			name:        "numeric seconds",
+			jsonBody:    `{"model":"doubao-seedance-2-0-260128","seconds":6,"prompt":"test"}`,
+			expectedSec: "6",
+			expectedDur: 6,
+		},
+		{
+			name:        "string seconds",
+			jsonBody:    `{"model":"doubao-seedance-2-0-260128","seconds":"10","prompt":"test"}`,
+			expectedSec: "10",
+			expectedDur: 10,
+		},
+		{
+			name:        "numeric duration",
+			jsonBody:    `{"model":"doubao-seedance-2-0-260128","duration":5,"prompt":"test"}`,
+			expectedSec: "5",
+			expectedDur: 5,
+		},
+		{
+			name:        "string duration",
+			jsonBody:    `{"model":"doubao-seedance-2-0-260128","duration":"8","prompt":"test"}`,
+			expectedSec: "8",
+			expectedDur: 8,
+		},
+		{
+			name:        "both provided - seconds takes priority for Seconds string",
+			jsonBody:    `{"model":"doubao-seedance-2-0-260128","seconds":6,"duration":8,"prompt":"test"}`,
+			expectedSec: "6",
+			expectedDur: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req TaskSubmitReq
+			err := json.Unmarshal([]byte(tt.jsonBody), &req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSec, req.Seconds)
+			assert.Equal(t, tt.expectedDur, req.Duration)
+		})
+	}
+}
+
+func TestTaskSubmitReq_Unmarshal_InputReferenceAndMetadata(t *testing.T) {
+	jsonBody := `{
+		"model": "doubao-seedance-2-5-260628",
+		"prompt": "结合参考图生成一个简单安静的视频",
+		"seconds": 5,
+		"size": "720p",
+		"metadata": {
+			"eca_aspect_ratio": "16:9",
+			"input_reference": [
+				{
+					"image": "https://example.com/img1.png"
+				},
+				{
+					"image": "https://example.com/img2.png"
+				}
+			]
+		}
+	}`
+
+	var req TaskSubmitReq
+	err := json.Unmarshal([]byte(jsonBody), &req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "doubao-seedance-2-5-260628", req.Model)
+	assert.Equal(t, "5", req.Seconds)
+	assert.Equal(t, 5, req.Duration)
+	assert.Equal(t, "720p", req.Size)
+	require.NotNil(t, req.Metadata)
+	assert.Equal(t, "16:9", req.Metadata["eca_aspect_ratio"])
+	assert.NotNil(t, req.Metadata["input_reference"])
+}
+
+func TestTaskSubmitReq_Unmarshal_InputReferenceString(t *testing.T) {
+	jsonBody := `{
+		"model": "doubao-seedance-2-5-260628",
+		"prompt": "Sora 风格",
+		"input_reference": "https://example.com/reference.png"
+	}`
+
+	var req TaskSubmitReq
+	err := json.Unmarshal([]byte(jsonBody), &req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://example.com/reference.png", req.InputReference)
+}

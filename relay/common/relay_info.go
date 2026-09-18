@@ -891,6 +891,7 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	aux := &struct {
 		Metadata json.RawMessage `json:"metadata,omitempty"`
 		Duration json.RawMessage `json:"duration,omitempty"`
+		Seconds  json.RawMessage `json:"seconds,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
@@ -914,19 +915,40 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	if len(aux.Seconds) > 0 {
+		var secInt int
+		if err := common.Unmarshal(aux.Seconds, &secInt); err == nil {
+			t.Seconds = strconv.Itoa(secInt)
+			if t.Duration == 0 {
+				t.Duration = secInt
+			}
+		} else {
+			var secStr string
+			if err := common.Unmarshal(aux.Seconds, &secStr); err == nil && secStr != "" {
+				t.Seconds = secStr
+				if t.Duration == 0 {
+					if v, err := strconv.Atoi(secStr); err == nil {
+						t.Duration = v
+					}
+				}
+			}
+		}
+	} else if t.Duration > 0 && t.Seconds == "" {
+		t.Seconds = strconv.Itoa(t.Duration)
+	}
+
 	if len(aux.Metadata) > 0 {
 		var metadataStr string
 		if err := common.Unmarshal(aux.Metadata, &metadataStr); err == nil && metadataStr != "" {
 			var metadataObj map[string]interface{}
 			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
 				t.Metadata = metadataObj
-				return nil
 			}
-		}
-
-		var metadataObj map[string]interface{}
-		if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
-			t.Metadata = metadataObj
+		} else {
+			var metadataObj map[string]interface{}
+			if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
+				t.Metadata = metadataObj
+			}
 		}
 	}
 
