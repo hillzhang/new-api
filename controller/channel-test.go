@@ -83,6 +83,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		constant.ChannelTypeDoubaoVideo,
 		constant.ChannelTypeWangsuVideo,
 		constant.ChannelTypeVidu,
+		constant.ChannelTypeCtyunVideo,
 	}
 	if lo.Contains(unsupportedTestChannelTypes, channel.Type) {
 		channelTypeName := constant.GetChannelTypeName(channel.Type)

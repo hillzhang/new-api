@@ -175,6 +175,17 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models supported by Wangsu Video (e.g. doubao-seedance-2-5-260628)',
     },
   },
+  62: {
+    id: 62,
+    name: CHANNEL_TYPES[62],
+    icon: 'Ali',
+    defaultBaseUrl: 'https://ai.ctaigw.cn',
+    hints: {
+      baseUrl: 'Default: https://ai.ctaigw.cn',
+      key: 'Ctyun Video TokenHub API Key',
+      models: 'HappyHorse and Wanx video models supported by Ctyun Video',
+    },
+  },
 }
 
 /**
