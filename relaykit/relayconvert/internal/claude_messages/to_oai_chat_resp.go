@@ -109,16 +109,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		Object:  "chat.completion",
 		Created: kitutil.GetTimestamp(),
 	}
-	var responseText string
-	var responseThinking string
-	if len(claudeResponse.Content) > 0 {
-		responseText = claudeResponse.Content[0].GetText()
-		if claudeResponse.Content[0].Thinking != nil {
-			responseThinking = *claudeResponse.Content[0].Thinking
-		}
-	}
+	var textBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	tools := make([]dto.ToolCallResponse, 0)
-	thinkingContent := ""
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
@@ -135,12 +128,15 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 			})
 		case "thinking":
 			if message.Thinking != nil {
-				thinkingContent = *message.Thinking
+				thinkingBuilder.WriteString(*message.Thinking)
 			}
 		case "text":
-			responseText = message.GetText()
+			textBuilder.WriteString(message.GetText())
 		}
 	}
+	responseText := textBuilder.String()
+	thinkingContent := thinkingBuilder.String()
+
 	choice := dto.OpenAITextResponseChoice{
 		Index: 0,
 		Message: dto.Message{
@@ -149,14 +145,14 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		FinishReason: StopReasonClaudeToOpenAI(claudeResponse.StopReason),
 	}
 	choice.SetStringContent(responseText)
-	if len(responseThinking) > 0 {
-		choice.ReasoningContent = &responseThinking
+	// 双重暴露思考推理内容，同时填充 choice.ReasoningContent 与 choice.Message.ReasoningContent
+	// 以全面兼容 DeepSeek/OpenAI 标准客户端以及部分只读取 Choice 根级 reasoning_content 的前端客户端
+	if thinkingContent != "" {
+		choice.ReasoningContent = &thinkingContent
+		choice.Message.ReasoningContent = &thinkingContent
 	}
 	if len(tools) > 0 {
 		choice.Message.SetToolCalls(tools)
-	}
-	if thinkingContent != "" {
-		choice.Message.ReasoningContent = &thinkingContent
 	}
 	fullTextResponse.Model = claudeResponse.Model
 	choices = append(choices, choice)

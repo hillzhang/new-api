@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -43,7 +44,28 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	requestURL := fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl)
+	// 去除 BaseURL 末尾多余的斜杠
+	baseURL := strings.TrimRight(info.ChannelBaseUrl, "/")
+	var requestURL string
+
+	// 智能路径路由策略：
+	// 1. 若用户配置的 BaseURL 已经以 /messages 结尾（如填入了完整端点地址），直接复用，避免重复拼接
+	// 2. 若用户配置了第三方网关的 Anthropic 协议路径（包含 /v2/llm/anthropic），自动补齐 /messages
+	// 3. 若用户配置了统一网关前缀（以 /v2/llm 结尾），根据 Anthropic 协议自动追加 /anthropic/messages
+	// 4. 若用户配置的 BaseURL 已经以 /v1 结尾（如自建反代 https://proxy/v1），仅需追加 /messages，防止重复拼接成 /v1/v1/messages
+	// 5. 其余情况遵循 Anthropic 官方标准规范，统一追加 /v1/messages
+	if strings.HasSuffix(baseURL, "/messages") {
+		requestURL = baseURL
+	} else if strings.Contains(baseURL, "/v2/llm/anthropic") {
+		requestURL = fmt.Sprintf("%s/messages", baseURL)
+	} else if strings.HasSuffix(baseURL, "/v2/llm") {
+		requestURL = fmt.Sprintf("%s/anthropic/messages", baseURL)
+	} else if strings.HasSuffix(baseURL, "/v1") {
+		requestURL = fmt.Sprintf("%s/messages", baseURL)
+	} else {
+		requestURL = fmt.Sprintf("%s/v1/messages", baseURL)
+	}
+
 	if !shouldAppendClaudeBetaQuery(info) {
 		return requestURL, nil
 	}
@@ -82,7 +104,12 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	// 设置 Anthropic 原生规范鉴权头
 	req.Set("x-api-key", info.ApiKey)
+	// 兼容国内云平台/第三方 API Gateway 代理：同步设置 Authorization Bearer 请求头，防止外层网关拦截
+	if req.Get("Authorization") == "" {
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+	}
 	anthropicVersion := c.Request.Header.Get("anthropic-version")
 	if anthropicVersion == "" {
 		anthropicVersion = "2023-06-01"

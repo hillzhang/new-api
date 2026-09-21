@@ -327,18 +327,19 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
 	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
-	if isOModel || isGPT5Model {
+	isGPT6Model := dto.IsOpenAIGPT6Model(info.UpstreamModelName)
+	if isOModel || isGPT5Model || isGPT6Model {
 		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
-			request.MaxTokens = nil
 		}
+		request.MaxTokens = nil
 
 		if isOModel {
 			request.Temperature = nil
 		}
 
-		// gpt-5系列模型适配 归零不再支持的参数
-		if isGPT5Model {
+		// gpt-5与gpt-6系列模型适配 归零不再支持的参数
+		if isGPT5Model || isGPT6Model {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
@@ -354,7 +355,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 		info.SetReasoningEffort(request.ReasoningEffort)
 
-		// o系列模型developer适配（o1-mini除外）
+		// o系列及gpt-5/gpt-6模型developer适配（o1-mini除外）
 		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
 			//修改第一个Message的内容，将system改为developer
 			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {

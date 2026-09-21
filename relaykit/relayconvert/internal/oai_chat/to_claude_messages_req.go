@@ -124,14 +124,16 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(textRequest.Model); ok && effortLevel != "" &&
 		(strings.HasPrefix(textRequest.Model, "claude-opus-4-6") ||
 			strings.HasPrefix(textRequest.Model, "claude-opus-4-7") ||
-			strings.HasPrefix(textRequest.Model, "claude-opus-4-8")) {
+			strings.HasPrefix(textRequest.Model, "claude-opus-4-8") ||
+			strings.HasPrefix(textRequest.Model, "claude-fable-")) {
 		claudeRequest.Model = baseModel
 		claudeRequest.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
 		if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
-			strings.HasPrefix(baseModel, "claude-opus-4-8") {
+			strings.HasPrefix(baseModel, "claude-opus-4-8") ||
+			strings.HasPrefix(baseModel, "claude-fable-") {
 			claudeRequest.Thinking.Display = "summarized"
 			claudeRequest.Temperature = nil
 			claudeRequest.TopP = nil
@@ -145,7 +147,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 
 		trimmedModel := strings.TrimSuffix(textRequest.Model, "-thinking")
 		if strings.HasPrefix(trimmedModel, "claude-opus-4-7") ||
-			strings.HasPrefix(trimmedModel, "claude-opus-4-8") {
+			strings.HasPrefix(trimmedModel, "claude-opus-4-8") ||
+			strings.HasPrefix(trimmedModel, "claude-fable-") {
 			claudeRequest.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 			claudeRequest.OutputConfig = json.RawMessage(`{"effort":"high"}`)
 			claudeRequest.Temperature = nil
@@ -168,7 +171,39 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 	}
 
-	if textRequest.ReasoningEffort != "" {
+	// 针对新一代自适应思考模型（如网宿智算平台 Claude Fable 5.1 系列）进行协议规范化处理：
+	// 1. 自适应思考模式：Thinking 模式固定为 adaptive（思考始终开启，由模型自主决策），严禁使用旧版 budget_tokens
+	// 2. 采样参数彻底置空：Anthropic 官方与智算网关严格禁止传递外部采样参数 (temperature / top_p / top_k)，置为 nil 避免引发网关 503 重试超时
+	// 3. 思考强度控制：若客户端传递了 OpenAI 标准的 reasoning_effort（如 low/medium/high/xhigh/max），标准映射为 output_config.effort
+	// 4. 默认 max_tokens 兜底：若上游调用方未显式传递 max_tokens，且未命中全局选项时，设置 4096 作为安全默认值，避免转换抛错
+	isClaudeFable := strings.HasPrefix(strings.ToLower(strings.TrimSpace(claudeRequest.Model)), "claude-fable-")
+	if isClaudeFable {
+		if claudeRequest.Thinking == nil {
+			claudeRequest.Thinking = &dto.Thinking{
+				Type: "adaptive",
+			}
+		} else {
+			claudeRequest.Thinking.Type = "adaptive"
+			claudeRequest.Thinking.BudgetTokens = nil
+		}
+		// 严禁传递采样参数，赋值为 nil，JSON 序列化时由于 omitempty 会被自动省略
+		claudeRequest.Temperature = nil
+		claudeRequest.TopP = nil
+		claudeRequest.TopK = nil
+
+		// 若客户端传递了 OpenAI 的 reasoning_effort，转译为网宿与 Claude 标准的 output_config.effort
+		if textRequest.ReasoningEffort != "" {
+			claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, textRequest.ReasoningEffort))
+		}
+
+		// 安全兜底：当客户端未指定 max_tokens 时赋予默认值 4096，防止触发 ErrMissingMaxTokens 拦截
+		if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens == 0 {
+			claudeRequest.MaxTokens = kitutil.GetPointer[uint](4096)
+		}
+	}
+
+	// 仅对非自适应思考模型应用旧版的基于 budget_tokens 的 reasoning_effort 转换
+	if textRequest.ReasoningEffort != "" && !isClaudeFable {
 		switch textRequest.ReasoningEffort {
 		case "low":
 			claudeRequest.Thinking = &dto.Thinking{
@@ -188,7 +223,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 	}
 
-	if textRequest.Reasoning != nil {
+	// 仅对非自适应思考模型解析 OpenRouter 格式的 reasoning 配置，防止意外将自适应思考模型覆写为 enabled+budget_tokens 模式
+	if textRequest.Reasoning != nil && !isClaudeFable {
 		var reasoningConfig openRouterRequestReasoning
 		if err := kitutil.Unmarshal(textRequest.Reasoning, &reasoningConfig); err != nil {
 			return nil, err
@@ -391,6 +427,20 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
+
+	// 映射 OpenAI 请求中的 user 外部用户标识到 Claude metadata.user_id 字段（符合网宿智算网关及 Anthropic 官方规范）
+	if len(textRequest.User) > 0 && string(textRequest.User) != "null" && len(claudeRequest.Metadata) == 0 {
+		var userStr string
+		if err := json.Unmarshal(textRequest.User, &userStr); err == nil && userStr != "" {
+			claudeRequest.Metadata = json.RawMessage(fmt.Sprintf(`{"user_id":%q}`, userStr))
+		} else {
+			userRaw := strings.Trim(string(textRequest.User), "\"")
+			if userRaw != "" && userRaw != "null" {
+				claudeRequest.Metadata = json.RawMessage(fmt.Sprintf(`{"user_id":%q}`, userRaw))
+			}
+		}
+	}
+
 	// Checked last so every injection path (default hook, thinking adapter
 	// floor) has had its chance to satisfy the required field.
 	if claudeRequest.MaxTokens == nil {

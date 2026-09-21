@@ -36,7 +36,7 @@ type GeneralOpenAIRequest struct {
 	MaxTokens           *uint             `json:"max_tokens,omitempty"`
 	MaxCompletionTokens *uint             `json:"max_completion_tokens,omitempty"`
 	ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
-	Verbosity           json.RawMessage   `json:"verbosity,omitempty"` // gpt-5
+	Verbosity           json.RawMessage   `json:"verbosity,omitempty"` // gpt-5 / gpt-6
 	Temperature         *float64          `json:"temperature,omitempty"`
 	TopP                *float64          `json:"top_p,omitempty"`
 	TopK                *int              `json:"top_k,omitempty"`
@@ -73,6 +73,7 @@ type GeneralOpenAIRequest struct {
 	Store json.RawMessage `json:"store,omitempty"`
 	// Used by OpenAI to cache responses for similar requests to optimize your cache hit rates. Replaces the user field
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
 	LogitBias            json.RawMessage `json:"logit_bias,omitempty"`
 	Metadata             json.RawMessage `json:"metadata,omitempty"`
@@ -230,7 +231,13 @@ func IsOpenAIReasoningOModel(modelName string) bool {
 }
 
 func IsOpenAIGPT5Model(modelName string) bool {
-	return strings.HasPrefix(modelName, "gpt-5")
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(normalized, "gpt-5")
+}
+
+func IsOpenAIGPT6Model(modelName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(normalized, "gpt-6")
 }
 
 func IsQwenThinkingBudgetModel(modelName string) bool {
@@ -246,7 +253,7 @@ func (r *GeneralOpenAIRequest) GetSystemRoleName() string {
 		if !strings.HasPrefix(r.Model, "o1-mini") && !strings.HasPrefix(r.Model, "o1-preview") {
 			return "developer"
 		}
-	} else if IsOpenAIGPT5Model(r.Model) {
+	} else if IsOpenAIGPT5Model(r.Model) || IsOpenAIGPT6Model(r.Model) {
 		return "developer"
 	}
 	return "system"

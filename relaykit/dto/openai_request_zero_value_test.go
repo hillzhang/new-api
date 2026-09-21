@@ -195,6 +195,7 @@ func TestGeneralOpenAIRequestGetSystemRoleName(t *testing.T) {
 		{name: "o1 mini stays system", model: "o1-mini", want: "system"},
 		{name: "o1 preview stays system", model: "o1-preview", want: "system"},
 		{name: "gpt 5 uses developer", model: "gpt-5", want: "developer"},
+		{name: "gpt 6 uses developer", model: "gpt-6-astra", want: "developer"},
 		{name: "omni is not o series", model: "omni-moderation-latest", want: "system"},
 	}
 
@@ -206,3 +207,16 @@ func TestGeneralOpenAIRequestGetSystemRoleName(t *testing.T) {
 		})
 	}
 }
+
+func TestGeneralOpenAIRequestPromptCacheOptions(t *testing.T) {
+	raw := []byte(`{"model":"gpt-6-astra","prompt_cache_options":{"ttl":"30m"}}`)
+	var req GeneralOpenAIRequest
+	err := kitutil.Unmarshal(raw, &req)
+	require.NoError(t, err)
+
+	encoded, err := kitutil.Marshal(req)
+	require.NoError(t, err)
+
+	require.Equal(t, "30m", gjson.GetBytes(encoded, "prompt_cache_options.ttl").String())
+}
+
