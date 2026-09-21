@@ -69,3 +69,20 @@ func TestRecalcQuotaFromRatiosRejectsAllInvalidAdjustedRatios(t *testing.T) {
 	assert.Equal(t, 0, quota)
 	assert.True(t, info.PriceData.HasOtherRatio("duration"))
 }
+
+func TestShouldUseResponsesForGPT6Tools(t *testing.T) {
+	// 场景 1: OpenAI 渠道, gpt-6-astra, 带有 tools -> 必须为 true (走 responses)
+	assert.True(t, ShouldUseResponsesForGPT6Tools(1, "gpt-6-astra", "gpt-6-astra", true))
+
+	// 场景 2: OpenAI 渠道, gpt-6-astra, 不带 tools -> 为 false (走正常 chat/completions)
+	assert.False(t, ShouldUseResponsesForGPT6Tools(1, "gpt-6-astra", "gpt-6-astra", false))
+
+	// 场景 3: Azure 渠道, openai/gpt-6-astra, 带有 tools -> 为 true
+	assert.True(t, ShouldUseResponsesForGPT6Tools(3, "openai/gpt-6-astra", "gpt-6-astra", true))
+
+	// 场景 4: 其它模型如 gpt-4o, 即使带 tools 也不强制走 responses
+	assert.False(t, ShouldUseResponsesForGPT6Tools(1, "gpt-4o", "gpt-4o", true))
+
+	// 场景 5: 非 OpenAI/Azure 渠道 (如 Anthropic 渠道), 即使带 tools 也不走 responses
+	assert.False(t, ShouldUseResponsesForGPT6Tools(14, "gpt-6-astra", "gpt-6-astra", true))
+}

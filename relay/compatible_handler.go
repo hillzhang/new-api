@@ -22,6 +22,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func ShouldUseResponsesForGPT6Tools(channelType int, upstreamModel string, requestModel string, hasTools bool) bool {
+	if !hasTools {
+		return false
+	}
+	if channelType != constant.ChannelTypeOpenAI && channelType != constant.ChannelTypeAzure {
+		return false
+	}
+	return dto.IsOpenAIGPT6Model(upstreamModel) || dto.IsOpenAIGPT6Model(requestModel)
+}
+
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
@@ -71,23 +81,33 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	adaptor.Init(info)
 
 	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	shouldUseResponses := service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName)
+	if !shouldUseResponses {
+		hasFunctions := len(request.Functions) > 0 && string(request.Functions) != "null" && string(request.Functions) != "[]"
+		hasTools := len(request.Tools) > 0 || hasFunctions
+		if ShouldUseResponsesForGPT6Tools(info.ChannelType, info.UpstreamModelName, request.Model, hasTools) {
+			shouldUseResponses = true
+		}
+	}
 	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
 		!passThroughGlobal &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
-		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+		shouldUseResponses {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
 		if newApiErr != nil {
 			return newApiErr
 		}
 
-		var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
-		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
+		if usage != nil {
+			var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+			var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
-		if containAudioTokens && containsAudioRatios {
-			service.PostAudioConsumeQuota(c, info, usage, "")
-		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
+			if containAudioTokens && containsAudioRatios {
+				service.PostAudioConsumeQuota(c, info, usage, "")
+			} else {
+				service.PostTextConsumeQuota(c, info, usage, nil)
+			}
 		}
 		return nil
 	}

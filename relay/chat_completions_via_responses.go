@@ -71,6 +71,14 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 }
 
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.NewAPIError) {
+	if adaptor != nil {
+		if converted, err := adaptor.ConvertOpenAIRequest(c, info, request); err == nil {
+			if req, ok := converted.(*dto.GeneralOpenAIRequest); ok {
+				request = req
+			}
+		}
+	}
+
 	chatJSON, err := common.Marshal(request)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

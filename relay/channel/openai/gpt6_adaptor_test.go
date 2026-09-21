@@ -123,7 +123,7 @@ func TestConvertOpenAIRequest_GPT6_CaseInsensitive(t *testing.T) {
 	assert.Equal(t, uint(1024), *converted.MaxCompletionTokens)
 }
 
-func TestConvertOpenAIRequest_GPT6_FunctionToolsSetsReasoningEffortToNone(t *testing.T) {
+func TestConvertOpenAIRequest_GPT6_PreservesReasoningEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -135,18 +135,11 @@ func TestConvertOpenAIRequest_GPT6_FunctionToolsSetsReasoningEffortToNone(t *tes
 		},
 	}
 
-	// 场景 1: 客户端传入了 tools 且显式传了 reasoning_effort: "medium"
+	// 场景 1: gpt-6-astra 正常保留用户的 reasoning_effort（如 high），不能被设为 none
 	req := &dto.GeneralOpenAIRequest{
 		Model:           "gpt-6-astra",
-		ReasoningEffort: "medium",
-		Tools: []dto.ToolCallRequest{
-			{
-				Type: "function",
-				Function: dto.FunctionRequest{
-					Name: "get_current_weather",
-				},
-			},
-		},
+		ReasoningEffort: "high",
+		Temperature:     lo.ToPtr(0.7),
 	}
 
 	res, err := adaptor.ConvertOpenAIRequest(c, info, req)
@@ -155,55 +148,53 @@ func TestConvertOpenAIRequest_GPT6_FunctionToolsSetsReasoningEffortToNone(t *tes
 	converted, ok := res.(*dto.GeneralOpenAIRequest)
 	require.True(t, ok)
 
-	// 必须将 reasoning_effort 强制置为 'none'，以满足 OpenAI /v1/chat/completions 的要求
-	assert.Equal(t, "none", converted.ReasoningEffort, "reasoning_effort must be 'none' when tools are provided for gpt-6")
-	assert.Equal(t, "none", info.ReasoningEffort, "relayInfo.ReasoningEffort must also be updated to 'none'")
-	assert.Nil(t, converted.Reasoning, "reasoning raw message must be nil")
+	assert.Equal(t, "high", converted.ReasoningEffort, "gpt-6 does not support none, must preserve valid effort")
+	assert.Nil(t, converted.Temperature, "temperature must be nil for gpt-6")
 
-	// 场景 2: 客户端未传 reasoning_effort，但传了 tools，默认也必须补上 "none"
-	req2 := &dto.GeneralOpenAIRequest{
-		Model: "gpt-6-astra",
-		Tools: []dto.ToolCallRequest{
-			{
-				Type: "function",
-				Function: dto.FunctionRequest{
-					Name: "execute_query",
-				},
-			},
+	// 场景 2: 模型后缀 gpt-6-astra-medium 自动转为 reasoning_effort
+	info2 := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-6-astra-medium",
 		},
 	}
-	res2, err := adaptor.ConvertOpenAIRequest(c, info, req2)
+	req2 := &dto.GeneralOpenAIRequest{
+		Model: "gpt-6-astra-medium",
+	}
+	res2, err := adaptor.ConvertOpenAIRequest(c, info2, req2)
 	require.NoError(t, err)
 	converted2, ok := res2.(*dto.GeneralOpenAIRequest)
 	require.True(t, ok)
-	assert.Equal(t, "none", converted2.ReasoningEffort, "reasoning_effort must be set to 'none' even if not passed initially")
+	assert.Equal(t, "medium", converted2.ReasoningEffort)
+	assert.Equal(t, "gpt-6-astra", converted2.Model)
+}
 
-	// 场景 3: 命名空间前缀 openai/gpt-6-astra 且带 functions
-	info3 := &relaycommon.RelayInfo{
+func TestConvertOpenAIResponsesRequest_GPT6_SanitizesTemperatureAndTopP(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			UpstreamModelName: "openai/gpt-6-astra",
+			UpstreamModelName: "gpt-6-astra",
 		},
 	}
-	req3 := &dto.GeneralOpenAIRequest{
-		Model:     "openai/gpt-6-astra",
-		Functions: []byte(`[{"name":"test_fn"}]`),
-	}
-	res3, err := adaptor.ConvertOpenAIRequest(c, info3, req3)
-	require.NoError(t, err)
-	converted3, ok := res3.(*dto.GeneralOpenAIRequest)
-	require.True(t, ok)
-	assert.Equal(t, "none", converted3.ReasoningEffort, "reasoning_effort must be 'none' when legacy functions are provided")
 
-	// 场景 4: 无 tools 时正常保留 reasoning_effort
-	req4 := &dto.GeneralOpenAIRequest{
-		Model:           "gpt-6-astra",
-		ReasoningEffort: "high",
+	req := dto.OpenAIResponsesRequest{
+		Model:       "gpt-6-astra",
+		Temperature: lo.ToPtr(0.8),
+		TopP:        lo.ToPtr(0.95),
+		Reasoning: &dto.Reasoning{
+			Effort: "high",
+		},
 	}
-	res4, err := adaptor.ConvertOpenAIRequest(c, info, req4)
+
+	res, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, req)
 	require.NoError(t, err)
-	converted4, ok := res4.(*dto.GeneralOpenAIRequest)
+
+	converted, ok := res.(dto.OpenAIResponsesRequest)
 	require.True(t, ok)
-	assert.Equal(t, "high", converted4.ReasoningEffort, "reasoning_effort should be preserved when no tools are present")
+
+	assert.Nil(t, converted.Temperature, "temperature must be nil in responses for gpt-6")
+	assert.Nil(t, converted.TopP, "top_p must be nil in responses for gpt-6")
+	require.NotNil(t, converted.Reasoning)
+	assert.Equal(t, "high", converted.Reasoning.Effort)
 }
 
 

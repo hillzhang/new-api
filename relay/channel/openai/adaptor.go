@@ -353,18 +353,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Model = originModel
 		}
 
-		// 处理 Function Tools 与 reasoning_effort 的互斥兼容：
-		// GPT-6 与 GPT-5 系列前沿模型在 /v1/chat/completions 中使用 tools/functions 时，
-		// 上游不支持带有 reasoning_effort 的思考推演，会明确返回 400 错误：
-		// "Function tools with reasoning_effort are not supported for gpt-6-astra in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
-		// 因此当检测到请求包含 tools 或 functions 时，必须将 reasoning_effort 显式置为 "none"，并清空额外 reasoning 字段以保证工具调用顺利执行
-		hasFunctions := len(request.Functions) > 0 && string(request.Functions) != "null" && string(request.Functions) != "[]"
-		hasTools := len(request.Tools) > 0 || hasFunctions
-		if (isGPT6Model || isGPT5Model) && hasTools {
-			request.ReasoningEffort = "none"
-			request.Reasoning = nil
-		}
-
 		info.SetReasoningEffort(request.ReasoningEffort)
 
 		// o系列及gpt-5/gpt-6模型developer适配（o1-mini除外）
@@ -647,6 +635,19 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.SetReasoningEffort(request.Reasoning.Effort)
 	}
+
+	upstreamModel := request.Model
+	if info != nil && info.UpstreamModelName != "" {
+		upstreamModel = info.UpstreamModelName
+	}
+	isOModel := dto.IsOpenAIReasoningOModel(upstreamModel) || dto.IsOpenAIReasoningOModel(request.Model)
+	isGPT5Model := dto.IsOpenAIGPT5Model(upstreamModel) || dto.IsOpenAIGPT5Model(request.Model)
+	isGPT6Model := dto.IsOpenAIGPT6Model(upstreamModel) || dto.IsOpenAIGPT6Model(request.Model)
+	if isOModel || isGPT5Model || isGPT6Model {
+		request.Temperature = nil
+		request.TopP = nil
+	}
+
 	return request, nil
 }
 
