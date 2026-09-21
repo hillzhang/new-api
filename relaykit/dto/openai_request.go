@@ -232,12 +232,12 @@ func IsOpenAIReasoningOModel(modelName string) bool {
 
 func IsOpenAIGPT5Model(modelName string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.HasPrefix(normalized, "gpt-5")
+	return strings.HasPrefix(normalized, "gpt-5") || strings.Contains(normalized, "/gpt-5")
 }
 
 func IsOpenAIGPT6Model(modelName string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.HasPrefix(normalized, "gpt-6")
+	return strings.HasPrefix(normalized, "gpt-6") || strings.Contains(normalized, "/gpt-6")
 }
 
 func IsQwenThinkingBudgetModel(modelName string) bool {

@@ -123,3 +123,87 @@ func TestConvertOpenAIRequest_GPT6_CaseInsensitive(t *testing.T) {
 	assert.Equal(t, uint(1024), *converted.MaxCompletionTokens)
 }
 
+func TestConvertOpenAIRequest_GPT6_FunctionToolsSetsReasoningEffortToNone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-6-astra",
+		},
+	}
+
+	// 场景 1: 客户端传入了 tools 且显式传了 reasoning_effort: "medium"
+	req := &dto.GeneralOpenAIRequest{
+		Model:           "gpt-6-astra",
+		ReasoningEffort: "medium",
+		Tools: []dto.ToolCallRequest{
+			{
+				Type: "function",
+				Function: dto.FunctionRequest{
+					Name: "get_current_weather",
+				},
+			},
+		},
+	}
+
+	res, err := adaptor.ConvertOpenAIRequest(c, info, req)
+	require.NoError(t, err)
+
+	converted, ok := res.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+
+	// 必须将 reasoning_effort 强制置为 'none'，以满足 OpenAI /v1/chat/completions 的要求
+	assert.Equal(t, "none", converted.ReasoningEffort, "reasoning_effort must be 'none' when tools are provided for gpt-6")
+	assert.Equal(t, "none", info.ReasoningEffort, "relayInfo.ReasoningEffort must also be updated to 'none'")
+	assert.Nil(t, converted.Reasoning, "reasoning raw message must be nil")
+
+	// 场景 2: 客户端未传 reasoning_effort，但传了 tools，默认也必须补上 "none"
+	req2 := &dto.GeneralOpenAIRequest{
+		Model: "gpt-6-astra",
+		Tools: []dto.ToolCallRequest{
+			{
+				Type: "function",
+				Function: dto.FunctionRequest{
+					Name: "execute_query",
+				},
+			},
+		},
+	}
+	res2, err := adaptor.ConvertOpenAIRequest(c, info, req2)
+	require.NoError(t, err)
+	converted2, ok := res2.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "none", converted2.ReasoningEffort, "reasoning_effort must be set to 'none' even if not passed initially")
+
+	// 场景 3: 命名空间前缀 openai/gpt-6-astra 且带 functions
+	info3 := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "openai/gpt-6-astra",
+		},
+	}
+	req3 := &dto.GeneralOpenAIRequest{
+		Model:     "openai/gpt-6-astra",
+		Functions: []byte(`[{"name":"test_fn"}]`),
+	}
+	res3, err := adaptor.ConvertOpenAIRequest(c, info3, req3)
+	require.NoError(t, err)
+	converted3, ok := res3.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "none", converted3.ReasoningEffort, "reasoning_effort must be 'none' when legacy functions are provided")
+
+	// 场景 4: 无 tools 时正常保留 reasoning_effort
+	req4 := &dto.GeneralOpenAIRequest{
+		Model:           "gpt-6-astra",
+		ReasoningEffort: "high",
+	}
+	res4, err := adaptor.ConvertOpenAIRequest(c, info, req4)
+	require.NoError(t, err)
+	converted4, ok := res4.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "high", converted4.ReasoningEffort, "reasoning_effort should be preserved when no tools are present")
+}
+
+
