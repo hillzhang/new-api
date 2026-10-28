@@ -74,6 +74,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other := make(map[string]interface{})
 	other["model_ratio"] = modelRatio
 	other["group_ratio"] = groupRatio
+	if relayInfo != nil && relayInfo.PriceData.GroupRatioInfo.GroupModelRatio > 0 && relayInfo.PriceData.GroupRatioInfo.GroupModelRatio != 1.0 {
+		other["group_model_ratio"] = relayInfo.PriceData.GroupRatioInfo.GroupModelRatio
+	}
 	other["completion_ratio"] = completionRatio
 	other["cache_tokens"] = cacheTokens
 	other["cache_ratio"] = cacheRatio

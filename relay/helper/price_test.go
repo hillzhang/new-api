@@ -272,3 +272,44 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
 }
+
+func TestHandleGroupRatioAndModelPriceHelperWithGroupModelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Save global configs
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip": 0.8, "default": 1.0}`))
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"vip": {"gpt-4o": 0.5}}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+
+	ratioInfo := HandleGroupRatio(ctx, info)
+	require.Equal(t, 0.8, ratioInfo.GroupRatio)
+	require.Equal(t, 0.5, ratioInfo.GroupModelRatio)
+	require.Equal(t, 0.4, ratioInfo.EffectiveRatio())
+
+	// Test unconfigured model in vip group defaults GroupModelRatio to 1.0
+	info2 := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+	ratioInfo2 := HandleGroupRatio(ctx, info2)
+	require.Equal(t, 0.8, ratioInfo2.GroupRatio)
+	require.Equal(t, 1.0, ratioInfo2.GroupModelRatio)
+	require.Equal(t, 0.8, ratioInfo2.EffectiveRatio())
+}
+

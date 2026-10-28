@@ -63,12 +63,14 @@ import { safeJsonParse } from '../utils/json-parser'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 import { GroupRatioVisualEditor } from './group-ratio-visual-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
+import { GroupModelRatioVisualEditor } from './group-model-ratio-editor'
 
 type GroupFormValues = {
   GroupRatio: string
   TopupGroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
+  GroupModelRatio: string
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
@@ -214,6 +216,14 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               }
             />
 
+            <GroupModelRatioVisualEditor
+              value={form.watch('GroupModelRatio')}
+              groupOptions={groupNames}
+              onChange={(value) =>
+                handleFieldChange('GroupModelRatio', value)
+              }
+            />
+
             <FormField
               control={form.control}
               name='DefaultUseAutoGroup'
@@ -337,6 +347,33 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     {`{ targetGroup: ratio }`}{' '}
                     {t(
                       'to override billing when a user in one group uses a token of another group.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupModelRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Group model ratios')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Nested JSON: group →')}{' '}
+                    {`{ model: ratio }`}{' '}
+                    {t(
+                      'to apply additional model discounts per group (supports exact match or prefix wildcard like gpt-4*).'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -756,6 +793,31 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
                     'Only configured combinations are overridden. All other calls keep the billing group base ratio.'
+                  )}
+                </p>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value='group-model-ratio'>
+              <AccordionTrigger>{t('Group model ratios')}</AccordionTrigger>
+              <AccordionContent className='space-y-3'>
+                <p className='text-muted-foreground text-sm leading-6'>
+                  {t(
+                    'Set specific model discount multipliers for each group. The example below configures gpt-4o at 0.8x for vip, and 0.5x for svip.'
+                  )}
+                </p>
+                <GuideCodeBlock>{`{
+  "vip": {
+    "gpt-4o": 0.8,
+    "claude-3-5*": 0.9
+  },
+  "svip": {
+    "gpt-4o": 0.5
+  }
+}`}</GuideCodeBlock>
+                <p className='text-muted-foreground text-sm leading-6'>
+                  {t(
+                    'The final fee is multiplied by group ratio and this model ratio. Unconfigured models default to 1.0.'
                   )}
                 </p>
               </AccordionContent>

@@ -52,6 +52,7 @@ type BillingSnapshot struct {
 	ExprString                string  `json:"expr_string"`
 	ExprHash                  string  `json:"expr_hash"`
 	GroupRatio                float64 `json:"group_ratio"`
+	GroupModelRatio           float64 `json:"group_model_ratio"`
 	EstimatedPromptTokens     int     `json:"estimated_prompt_tokens"`
 	EstimatedCompletionTokens int     `json:"estimated_completion_tokens"`
 	EstimatedQuotaBeforeGroup float64 `json:"estimated_quota_before_group"`
@@ -59,6 +60,13 @@ type BillingSnapshot struct {
 	EstimatedTier             string  `json:"estimated_tier"`
 	QuotaPerUnit              float64 `json:"quota_per_unit"`
 	ExprVersion               int     `json:"expr_version"`
+}
+
+func (s *BillingSnapshot) EffectiveGroupRatio() float64 {
+	if s.GroupModelRatio > 0 {
+		return s.GroupRatio * s.GroupModelRatio
+	}
+	return s.GroupRatio
 }
 
 // TieredResult holds everything needed after running tiered settlement.

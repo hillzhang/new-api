@@ -1147,3 +1147,26 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, other, "image_generation_call")
 	assert.NotContains(t, other, "image_generation_call_price")
 }
+
+func TestCalculateTextQuotaSummaryAppliesGroupModelRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		StartTime:       time.Now(),
+	}
+	relayInfo.PriceData.GroupRatioInfo.GroupRatio = 0.8
+	relayInfo.PriceData.GroupRatioInfo.GroupModelRatio = 0.5
+	relayInfo.PriceData.ModelRatio = 2.0
+	relayInfo.PriceData.CompletionRatio = 1.0
+
+	usage := &dto.Usage{PromptTokens: 100, CompletionTokens: 100, TotalTokens: 200}
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	// total tokens = 100 + 100 = 200
+	// ratio = ModelRatio(2.0) * GroupRatio(0.8) * GroupModelRatio(0.5) = 0.8
+	// expected quota = 200 * 0.8 = 160
+	require.Equal(t, 0.5, summary.GroupModelRatio)
+	require.Equal(t, 160, summary.Quota)
+}
