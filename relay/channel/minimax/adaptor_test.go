@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -84,10 +85,13 @@ func TestConvertImageRequest(t *testing.T) {
 	}
 }
 
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
 func TestDoResponseForImageGeneration(t *testing.T) {
 	t.Parallel()
 
-	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 
@@ -134,4 +138,125 @@ func ioNopCloser(body string) nopReadCloser {
 
 func uintPtr(v uint) *uint {
 	return &v
+}
+
+func TestGetRequestURLForChatCompletions(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeChatCompletions,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://api.minimax.cn",
+		},
+	}
+
+	got, err := GetRequestURL(info)
+	if err != nil {
+		t.Fatalf("GetRequestURL returned error: %v", err)
+	}
+
+	want := "https://api.minimax.cn/v1/chat/completions"
+	if got != want {
+		t.Fatalf("GetRequestURL() = %q, want %q", got, want)
+	}
+}
+
+func TestGetModelList_IncludesM3Models(t *testing.T) {
+	t.Parallel()
+
+	adaptor := &Adaptor{}
+	models := adaptor.GetModelList()
+
+	expectedModels := []string{
+		"MiniMax-M3.1-Flash-Preview",
+		"MiniMax-M3",
+	}
+
+	for _, expected := range expectedModels {
+		if !slices.Contains(models, expected) {
+			t.Errorf("GetModelList() missing model: %s", expected)
+		}
+	}
+}
+
+func TestConvertOpenAIRequest_MaxTokensUpgrade(t *testing.T) {
+	t.Parallel()
+
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		OriginModelName: "MiniMax-M3.1-Flash-Preview",
+	}
+
+	maxTokensVal := uint(4096)
+	request := &dto.GeneralOpenAIRequest{
+		Model:     "MiniMax-M3.1-Flash-Preview",
+		MaxTokens: &maxTokensVal,
+	}
+
+	converted, err := adaptor.ConvertOpenAIRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New()), info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest failed: %v", err)
+	}
+
+	convertedReq, ok := converted.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		t.Fatalf("expected *dto.GeneralOpenAIRequest, got %T", converted)
+	}
+
+	if convertedReq.MaxCompletionTokens == nil || *convertedReq.MaxCompletionTokens != 4096 {
+		t.Fatalf("expected MaxCompletionTokens = 4096, got %#v", convertedReq.MaxCompletionTokens)
+	}
+}
+
+func TestConvertOpenAIRequest_M31ThinkingGuard(t *testing.T) {
+	t.Parallel()
+
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		OriginModelName: "MiniMax-M3.1-Flash-Preview",
+	}
+
+	// 场景 1: reasoning_effort 传入 "none" 应被自动清除，防止 MiniMax 400 拒绝
+	reqWithNone := &dto.GeneralOpenAIRequest{
+		Model:           "MiniMax-M3.1-Flash-Preview",
+		ReasoningEffort: "none",
+	}
+	converted1, err := adaptor.ConvertOpenAIRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New()), info, reqWithNone)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest failed: %v", err)
+	}
+	res1 := converted1.(*dto.GeneralOpenAIRequest)
+	if res1.ReasoningEffort != "" {
+		t.Fatalf("expected ReasoningEffort to be empty, got %q", res1.ReasoningEffort)
+	}
+
+	// 场景 2: thinking.type 为 disabled 应被安全移除，防止 MiniMax 400 拒绝
+	reqWithDisabled := &dto.GeneralOpenAIRequest{
+		Model:    "MiniMax-M3.1-Flash-Preview",
+		THINKING: json.RawMessage(`{"type":"disabled"}`),
+	}
+	converted2, err := adaptor.ConvertOpenAIRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New()), info, reqWithDisabled)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest failed: %v", err)
+	}
+	res2 := converted2.(*dto.GeneralOpenAIRequest)
+	if len(res2.THINKING) > 0 {
+		t.Fatalf("expected THINKING to be cleared for M3.1 when disabled, got %s", string(res2.THINKING))
+	}
+
+	// 场景 3: 正常的 reasoning_effort 档位（如 high/max）需无损保留
+	reqWithHigh := &dto.GeneralOpenAIRequest{
+		Model:           "MiniMax-M3.1-Flash-Preview",
+		ReasoningEffort: "high",
+	}
+	converted3, err := adaptor.ConvertOpenAIRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New()), info, reqWithHigh)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest failed: %v", err)
+	}
+	res3 := converted3.(*dto.GeneralOpenAIRequest)
+	if res3.ReasoningEffort != "high" {
+		t.Fatalf("expected ReasoningEffort to be 'high', got %q", res3.ReasoningEffort)
+	}
 }

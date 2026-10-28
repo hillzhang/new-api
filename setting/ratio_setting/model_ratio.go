@@ -299,8 +299,14 @@ var defaultModelPrice = map[string]float64{
 	"gpt-4o-mini-tts":                0.3,
 	"veo-3.0-generate-001":           0.4,
 	"veo-3.0-fast-generate-001":      0.15,
-	"veo-3.1-generate-preview":       0.4,
-	"veo-3.1-fast-generate-preview":  0.15,
+	"veo-3.1-generate-preview":      0.4,
+	"veo-3.1-fast-generate-preview": 0.15,
+	"MiniMax-H3":                    0.50, // 768P 基准：0.50 元/秒
+	"MiniMax-H3-image":              0.20, // 超额图片：0.20 元/张
+	"MiniMax-H3-Max":                0.33, // 480P 基准：0.33 元/秒
+	"MiniMax-H3-Max-image":          0.50, // Max 超额图片：0.50 元/张
+	"MiniMax-H3-Regeneration":       0.30, // 2K 再生成基准：0.30 元/秒
+	"MiniMax-H3-Regeneration-image": 0.15, // 再生成超额图片：0.15 元/张
 }
 
 var defaultAudioRatio = map[string]float64{

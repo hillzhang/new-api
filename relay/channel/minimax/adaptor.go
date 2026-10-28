@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -97,10 +98,42 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	return nil
 }
 
+func cleanM31ThinkingParams(request *dto.GeneralOpenAIRequest) {
+	// MiniMax-M3.1-Flash-Preview 强制开启深度思考：
+	// 1. 官方规范明确说明：不接受 reasoning_effort: "none"，传入会返回 HTTP 400
+	if strings.EqualFold(request.ReasoningEffort, "none") {
+		request.ReasoningEffort = ""
+	}
+
+	// 2. 官方规范明确说明：若传入 type 只能为 adaptive，传入 disabled 会返回 HTTP 400
+	if len(request.THINKING) > 0 {
+		var thinkMap map[string]any
+		if err := json.Unmarshal(request.THINKING, &thinkMap); err == nil {
+			if tType, ok := thinkMap["type"].(string); ok && strings.EqualFold(tType, "disabled") {
+				request.THINKING = nil
+			}
+		}
+	}
+}
+
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
+
+	// 官方已废弃 max_tokens，平滑升级到 max_completion_tokens
+	if request.MaxCompletionTokens == nil && request.MaxTokens != nil {
+		request.MaxCompletionTokens = request.MaxTokens
+	}
+
+	modelName := request.Model
+	if modelName == "" && info != nil {
+		modelName = info.OriginModelName
+	}
+	if strings.Contains(strings.ToLower(modelName), "m3.1") {
+		cleanM31ThinkingParams(request)
+	}
+
 	return request, nil
 }
 
