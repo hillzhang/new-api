@@ -67,7 +67,9 @@ export function filterByGroup(
   group: string
 ): PricingModel[] {
   if (group === FILTER_ALL) return models
-  return models.filter((m) => m.enable_groups?.includes(group))
+  return models.filter(
+    (m) => m.enable_groups?.includes(group) || m.enable_groups?.includes('all')
+  )
 }
 
 /**

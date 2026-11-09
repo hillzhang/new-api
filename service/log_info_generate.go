@@ -74,7 +74,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other := make(map[string]interface{})
 	other["model_ratio"] = modelRatio
 	other["group_ratio"] = groupRatio
-	if relayInfo != nil && relayInfo.PriceData.GroupRatioInfo.GroupModelRatio > 0 && relayInfo.PriceData.GroupRatioInfo.GroupModelRatio != 1.0 {
+	if relayInfo != nil && (relayInfo.PriceData.GroupRatioInfo.HasModelRatio || relayInfo.PriceData.GroupRatioInfo.GroupModelRatio > 0) && relayInfo.PriceData.GroupRatioInfo.GroupModelRatio != 1.0 {
 		other["group_model_ratio"] = relayInfo.PriceData.GroupRatioInfo.GroupModelRatio
 	}
 	other["completion_ratio"] = completionRatio
@@ -299,6 +299,9 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	other["group_ratio"] = priceData.GroupRatioInfo.GroupRatio
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
+	}
+	if (priceData.GroupRatioInfo.HasModelRatio || priceData.GroupRatioInfo.GroupModelRatio > 0) && priceData.GroupRatioInfo.GroupModelRatio != 1.0 {
+		other["group_model_ratio"] = priceData.GroupRatioInfo.GroupModelRatio
 	}
 	appendRequestPath(nil, relayInfo, other)
 	return other

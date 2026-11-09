@@ -270,6 +270,16 @@ function buildTypeDetailSegments(
           text: `${ratioLabel} ${formatRatioCompact(effectiveRatio)}x`,
         })
       }
+
+      if (
+        other.group_model_ratio != null &&
+        other.group_model_ratio !== 1 &&
+        Number.isFinite(other.group_model_ratio)
+      ) {
+        segments.push({
+          text: `${t('Group Model Ratio')} ${formatRatioCompact(other.group_model_ratio)}x`,
+        })
+      }
     }
   }
 

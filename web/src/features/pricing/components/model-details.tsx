@@ -67,7 +67,11 @@ import {
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  getAvailableGroups,
+  getConfiguredGroupRatio,
+  isTokenBasedModel,
+} from '../lib/model-helpers'
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import type {
   ModelCapability,
@@ -789,8 +793,8 @@ function AutoGroupChain(props: { model: PricingModel; autoGroups: string[] }) {
   const modelEnableGroups = Array.isArray(props.model.enable_groups)
     ? props.model.enable_groups
     : []
-  const autoChain = props.autoGroups.filter((g) =>
-    modelEnableGroups.includes(g)
+  const autoChain = props.autoGroups.filter(
+    (g) => modelEnableGroups.includes(g) || modelEnableGroups.includes('all')
   )
 
   if (autoChain.length === 0) return null
@@ -861,6 +865,7 @@ function GroupPricingSection(props: {
 }) {
   const { t } = useTranslation()
   const showRechargePrice = props.showRechargePrice ?? false
+  const effectiveGroupRatio = props.model.group_ratio || props.groupRatio || {}
 
   const availableGroups = useMemo(
     () => getAvailableGroups(props.model, props.usableGroup || {}),
@@ -949,7 +954,7 @@ function GroupPricingSection(props: {
     })
     const formattedPricesByGroup = new Map(
       availableGroups.map((group) => {
-        const ratio = props.groupRatio[group] || 1
+        const ratio = getConfiguredGroupRatio(effectiveGroupRatio, group)
         return [
           group,
           getDynamicFormattedPricesByTier(dynamicTiers, {
@@ -969,7 +974,7 @@ function GroupPricingSection(props: {
         <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
         <div className='space-y-3'>
           {availableGroups.map((group) => {
-            const ratio = props.groupRatio[group] || 1
+            const ratio = getConfiguredGroupRatio(effectiveGroupRatio, group)
             const formattedPricesByTier =
               formattedPricesByGroup.get(group) ??
               new Map<DynamicPricingTier, Map<string, string>>()
@@ -1030,7 +1035,7 @@ function GroupPricingSection(props: {
       showRechargePrice,
       props.priceRate,
       props.usdExchangeRate,
-      props.groupRatio
+      effectiveGroupRatio
     )
   const renderFixedGroupPrice = (group: string) =>
     formatFixedPrice(
@@ -1039,7 +1044,7 @@ function GroupPricingSection(props: {
       showRechargePrice,
       props.priceRate,
       props.usdExchangeRate,
-      props.groupRatio
+      effectiveGroupRatio
     )
 
   return (
@@ -1065,7 +1070,7 @@ function GroupPricingSection(props: {
             header: t('Ratio'),
             className: thClass,
             cellClassName: 'text-muted-foreground py-2.5 font-mono',
-            cell: (group) => `${props.groupRatio[group] || 1}x`,
+            cell: (group) => `${getConfiguredGroupRatio(effectiveGroupRatio, group)}x`,
           },
           ...(isTokenBased
             ? [

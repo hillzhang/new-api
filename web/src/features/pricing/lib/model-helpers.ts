@@ -33,10 +33,11 @@ export function getAvailableGroups(
   const modelEnableGroups = Array.isArray(model.enable_groups)
     ? model.enable_groups
     : []
+  const isAll = modelEnableGroups.includes('all')
 
   return Object.keys(usableGroup)
     .filter((g) => !EXCLUDED_GROUPS.includes(g))
-    .filter((g) => modelEnableGroups.includes(g))
+    .filter((g) => isAll || modelEnableGroups.includes(g))
 }
 
 /**
@@ -65,11 +66,12 @@ export function getDisplayGroupRatio(
     ? model.enable_groups
     : []
   const groupRatio = model.group_ratio || {}
+  const isAll = modelEnableGroups.includes('all')
 
   if (
     selectedGroup &&
     selectedGroup !== FILTER_ALL &&
-    modelEnableGroups.includes(selectedGroup)
+    (isAll || modelEnableGroups.includes(selectedGroup))
   ) {
     return getConfiguredGroupRatio(groupRatio, selectedGroup)
   }
@@ -79,8 +81,9 @@ export function getDisplayGroupRatio(
   }
 
   let minRatio = Number.POSITIVE_INFINITY
+  const candidateGroups = isAll ? Object.keys(groupRatio) : modelEnableGroups
 
-  for (const group of modelEnableGroups) {
+  for (const group of candidateGroups) {
     const ratio = groupRatio[group]
     if (
       typeof ratio === 'number' &&

@@ -149,7 +149,7 @@ func mergeToolSurchargeItems(items []ToolSurchargeItem) []ToolSurchargeItem {
 func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary) decimal.Decimal {
 	dGroupRatio := decimal.NewFromFloat(summary.GroupRatio)
 	dGroupModelRatio := decimal.NewFromFloat(summary.GroupModelRatio)
-	if dGroupModelRatio.IsZero() {
+	if !relayInfo.PriceData.GroupRatioInfo.HasModelRatio && dGroupModelRatio.IsZero() {
 		dGroupModelRatio = decimal.NewFromInt(1)
 	}
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
@@ -236,7 +236,7 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // the result with tiered billing, affinity observation and logging.
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
 	groupModelRatio := relayInfo.PriceData.GroupRatioInfo.GroupModelRatio
-	if groupModelRatio <= 0 {
+	if !relayInfo.PriceData.GroupRatioInfo.HasModelRatio && groupModelRatio <= 0 {
 		groupModelRatio = 1.0
 	}
 	summary := textQuotaSummary{

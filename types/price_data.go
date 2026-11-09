@@ -12,9 +12,13 @@ type GroupRatioInfo struct {
 	GroupSpecialRatio float64
 	HasSpecialRatio   bool
 	GroupModelRatio   float64
+	HasModelRatio     bool
 }
 
 func (g GroupRatioInfo) EffectiveRatio() float64 {
+	if g.HasModelRatio {
+		return g.GroupRatio * g.GroupModelRatio
+	}
 	if g.GroupModelRatio > 0 {
 		return g.GroupRatio * g.GroupModelRatio
 	}

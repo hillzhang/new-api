@@ -1169,4 +1169,18 @@ func TestCalculateTextQuotaSummaryAppliesGroupModelRatio(t *testing.T) {
 	// expected quota = 200 * 0.8 = 160
 	require.Equal(t, 0.5, summary.GroupModelRatio)
 	require.Equal(t, 160, summary.Quota)
+
+	// Free model under group (GroupModelRatio == 0.0, HasModelRatio == true)
+	relayInfo.PriceData.GroupRatioInfo.GroupModelRatio = 0.0
+	relayInfo.PriceData.GroupRatioInfo.HasModelRatio = true
+	summaryFree := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	require.Equal(t, 0.0, summaryFree.GroupModelRatio)
+	require.Equal(t, 0, summaryFree.Quota)
+
+	// Unconfigured model under group (HasModelRatio == false) should fallback GroupModelRatio to 1.0
+	relayInfo.PriceData.GroupRatioInfo.GroupModelRatio = 0.0
+	relayInfo.PriceData.GroupRatioInfo.HasModelRatio = false
+	summaryUnconfigured := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	require.Equal(t, 1.0, summaryUnconfigured.GroupModelRatio)
+	require.Equal(t, 320, summaryUnconfigured.Quota) // 200 * 2.0 * 0.8 * 1.0 = 320
 }

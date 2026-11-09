@@ -291,6 +291,17 @@ function BillingBreakdown(props: {
     })
   }
 
+  if (
+    other.group_model_ratio != null &&
+    other.group_model_ratio !== 1 &&
+    Number.isFinite(other.group_model_ratio)
+  ) {
+    rows.push({
+      label: t('Group Model Ratio'),
+      value: `${formatRatio(other.group_model_ratio)}x`,
+    })
+  }
+
   if (!isTieredExpr && isClaude && hasAnyCacheTokens(other)) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({

@@ -48,12 +48,17 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		GroupSpecialRatio: -1,
 		GroupModelRatio:   1.0,
 	}
+	if relayInfo == nil {
+		return groupRatioInfo
+	}
 
 	// check auto group
-	autoGroup, exists := ctx.Get("auto_group")
-	if exists {
-		logger.LogDebug(ctx, "final group: %s", autoGroup)
-		relayInfo.UsingGroup = autoGroup.(string)
+	if ctx != nil {
+		autoGroup, exists := ctx.Get("auto_group")
+		if exists {
+			logger.LogDebug(ctx, "final group: %s", autoGroup)
+			relayInfo.UsingGroup = autoGroup.(string)
+		}
 	}
 
 	// check user group special ratio
@@ -68,7 +73,9 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	}
 
-	groupRatioInfo.GroupModelRatio = ratio_setting.GetGroupModelRatio(relayInfo.UsingGroup, relayInfo.OriginModelName)
+	groupModelRatio, hasModelRatio := ratio_setting.GetGroupModelRatioWithStatus(relayInfo.UsingGroup, relayInfo.OriginModelName)
+	groupRatioInfo.GroupModelRatio = groupModelRatio
+	groupRatioInfo.HasModelRatio = hasModelRatio
 
 	return groupRatioInfo
 }
@@ -252,6 +259,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		Quota:          quota,
 		GroupRatioInfo: groupRatioInfo,
 	}
+	if info != nil {
+		info.PriceData = priceData
+	}
 	return priceData, nil
 }
 
@@ -317,6 +327,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		ExprHash:                  exprHash,
 		GroupRatio:                groupRatioInfo.GroupRatio,
 		GroupModelRatio:           groupRatioInfo.GroupModelRatio,
+		HasGroupModelRatio:        groupRatioInfo.HasModelRatio,
 		EstimatedPromptTokens:     promptTokens,
 		EstimatedCompletionTokens: estimatedCompletionTokens,
 		EstimatedQuotaBeforeGroup: quotaBeforeGroup,

@@ -51,13 +51,59 @@ export function usePricingData() {
       const vendor = model.vendor_id
         ? vendorMap.get(model.vendor_id)
         : undefined
+
+      const effectiveGroupRatio: Record<string, number> = {}
+      if (data.group_ratio) {
+        for (const [groupName, baseRatio] of Object.entries(data.group_ratio)) {
+          let multiplier = 1.0
+          const groupModels = data.group_model_ratio?.[groupName]
+          if (groupModels) {
+            const trimmedModel = model.model_name.trim()
+            if (typeof groupModels[trimmedModel] === 'number') {
+              multiplier = groupModels[trimmedModel]
+            } else {
+              let wildcardMatch = 1.0
+              let wildcardFound = false
+              let longestMatchLen = -1
+
+              for (const [pattern, ratio] of Object.entries(groupModels)) {
+                const trimmedPattern = pattern.trim()
+                if (trimmedPattern === '*') {
+                  if (longestMatchLen < 0) {
+                    wildcardMatch = ratio
+                    wildcardFound = true
+                  }
+                  continue
+                }
+                if (trimmedPattern.endsWith('*')) {
+                  const prefix = trimmedPattern.slice(0, -1)
+                  if (
+                    trimmedModel.startsWith(prefix) &&
+                    prefix.length > longestMatchLen
+                  ) {
+                    longestMatchLen = prefix.length
+                    wildcardMatch = ratio
+                    wildcardFound = true
+                  }
+                }
+              }
+
+              if (wildcardFound) {
+                multiplier = wildcardMatch
+              }
+            }
+          }
+          effectiveGroupRatio[groupName] = baseRatio * multiplier
+        }
+      }
+
       return {
         ...model,
         key: model.model_name,
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
+        group_ratio: effectiveGroupRatio,
       }
     })
   }, [data])
@@ -66,6 +112,7 @@ export function usePricingData() {
     models,
     vendors: data?.vendors ?? [],
     groupRatio: data?.group_ratio ?? {},
+    groupModelRatio: data?.group_model_ratio ?? {},
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],

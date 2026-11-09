@@ -718,6 +718,24 @@ func TestComputeTieredQuota_WithGroupModelRatio(t *testing.T) {
 	if result.ActualQuotaAfterGroup != 750 {
 		t.Errorf("after group = %d, want 750", result.ActualQuotaAfterGroup)
 	}
+
+	// Test HasGroupModelRatio with 0.0 ratio (free model)
+	snapFree := &billingexpr.BillingSnapshot{
+		BillingMode:        "tiered_expr",
+		ExprString:         exprStr,
+		ExprHash:           billingexpr.ExprHashString(exprStr),
+		GroupRatio:         2.0,
+		GroupModelRatio:    0.0,
+		HasGroupModelRatio: true,
+		QuotaPerUnit:       500_000,
+	}
+	resultFree, err := billingexpr.ComputeTieredQuota(snapFree, billingexpr.TokenParams{P: 1000, C: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resultFree.ActualQuotaAfterGroup != 0 {
+		t.Errorf("after group for free model = %d, want 0", resultFree.ActualQuotaAfterGroup)
+	}
 }
 
 func TestComputeTieredQuota_ZeroTokens(t *testing.T) {
@@ -1061,6 +1079,34 @@ func TestLen_ZeroDefaultsToZero(t *testing.T) {
 	if trace.MatchedTier != "standard" {
 		t.Errorf("tier = %q, want standard (len=0 <= 200000)", trace.MatchedTier)
 	}
+}
+
+func TestBillingSnapshot_EffectiveGroupRatio(t *testing.T) {
+	var nilSnap *billingexpr.BillingSnapshot
+	assert.Equal(t, 1.0, nilSnap.EffectiveGroupRatio())
+
+	baseSnap := &billingexpr.BillingSnapshot{GroupRatio: 0.8}
+	assert.Equal(t, 0.8, baseSnap.EffectiveGroupRatio())
+
+	ratioSnap := &billingexpr.BillingSnapshot{
+		GroupRatio:         0.8,
+		GroupModelRatio:    0.5,
+		HasGroupModelRatio: true,
+	}
+	assert.Equal(t, 0.4, ratioSnap.EffectiveGroupRatio())
+
+	freeSnap := &billingexpr.BillingSnapshot{
+		GroupRatio:         0.8,
+		GroupModelRatio:    0.0,
+		HasGroupModelRatio: true,
+	}
+	assert.Equal(t, 0.0, freeSnap.EffectiveGroupRatio())
+
+	unflaggedSnap := &billingexpr.BillingSnapshot{
+		GroupRatio:      0.8,
+		GroupModelRatio: 0.5,
+	}
+	assert.Equal(t, 0.4, unflaggedSnap.EffectiveGroupRatio())
 }
 
 // ---------------------------------------------------------------------------

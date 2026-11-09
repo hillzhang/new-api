@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -299,9 +300,10 @@ func TestHandleGroupRatioAndModelPriceHelperWithGroupModelRatio(t *testing.T) {
 	ratioInfo := HandleGroupRatio(ctx, info)
 	require.Equal(t, 0.8, ratioInfo.GroupRatio)
 	require.Equal(t, 0.5, ratioInfo.GroupModelRatio)
+	require.True(t, ratioInfo.HasModelRatio)
 	require.Equal(t, 0.4, ratioInfo.EffectiveRatio())
 
-	// Test unconfigured model in vip group defaults GroupModelRatio to 1.0
+	// Test unconfigured model in vip group defaults GroupModelRatio to 1.0, HasModelRatio = false
 	info2 := &relaycommon.RelayInfo{
 		OriginModelName: "gpt-4",
 		UserGroup:       "vip",
@@ -310,6 +312,99 @@ func TestHandleGroupRatioAndModelPriceHelperWithGroupModelRatio(t *testing.T) {
 	ratioInfo2 := HandleGroupRatio(ctx, info2)
 	require.Equal(t, 0.8, ratioInfo2.GroupRatio)
 	require.Equal(t, 1.0, ratioInfo2.GroupModelRatio)
+	require.False(t, ratioInfo2.HasModelRatio)
 	require.Equal(t, 0.8, ratioInfo2.EffectiveRatio())
+
+	// Test 0.0 ratio (free model) in vip group
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"vip": {"gpt-4o": 0.5, "free-chat": 0.0}}`))
+	infoFree := &relaycommon.RelayInfo{
+		OriginModelName: "free-chat",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+	ratioInfoFree := HandleGroupRatio(ctx, infoFree)
+	require.True(t, ratioInfoFree.HasModelRatio)
+	require.Equal(t, 0.0, ratioInfoFree.GroupModelRatio)
+	require.Equal(t, 0.0, ratioInfoFree.EffectiveRatio())
 }
+
+func TestModelPriceHelperPerCall_WithGroupModelRatio(t *testing.T) {
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"mj_imagine": 0.1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip": 0.8}`))
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"vip": {"mj_imagine": 0.5}}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "mj_imagine",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, priceData, info.PriceData)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 0.1, priceData.ModelPrice)
+	require.Equal(t, 0.8, priceData.GroupRatioInfo.GroupRatio)
+	require.Equal(t, 0.5, priceData.GroupRatioInfo.GroupModelRatio)
+	require.True(t, priceData.GroupRatioInfo.HasModelRatio)
+	// Quota = 0.1 * 500000 * 0.8 * 0.5 = 20000
+	require.Equal(t, 20000, priceData.Quota)
+
+	// Free model ratio test (0.0)
+	origPreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
+	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
+	t.Cleanup(func() {
+		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = origPreConsume
+	})
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"vip": {"mj_imagine": 0.0}}`))
+	priceDataFree, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, 0, priceDataFree.Quota)
+	require.True(t, priceDataFree.FreeModel)
+}
+
+func TestHandleGroupRatio_NilSafety(t *testing.T) {
+	// 1. relayInfo == nil
+	resNilInfo := HandleGroupRatio(nil, nil)
+	require.Equal(t, 1.0, resNilInfo.GroupRatio)
+	require.Equal(t, 1.0, resNilInfo.GroupModelRatio)
+	require.Equal(t, -1.0, resNilInfo.GroupSpecialRatio)
+	require.False(t, resNilInfo.HasModelRatio)
+
+	// 2. ctx == nil with valid relayInfo
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip": 0.9}`))
+	require.NoError(t, ratio_setting.UpdateGroupModelRatioByJSONString(`{"vip": {"gpt-4": 0.7}}`))
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+	resNilCtx := HandleGroupRatio(nil, info)
+	require.Equal(t, 0.9, resNilCtx.GroupRatio)
+	require.Equal(t, 0.7, resNilCtx.GroupModelRatio)
+	require.True(t, resNilCtx.HasModelRatio)
+	require.InDelta(t, 0.63, resNilCtx.EffectiveRatio(), 1e-9)
+}
+
+
 

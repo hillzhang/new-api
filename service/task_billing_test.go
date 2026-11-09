@@ -1226,3 +1226,75 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 }
+
+func TestTaskBillingOther_WithGroupModelRatio(t *testing.T) {
+	task := &model.Task{
+		PrivateData: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{
+				ModelPrice:         0.5,
+				GroupRatio:         0.8,
+				GroupModelRatio:    0.5,
+				HasGroupModelRatio: true,
+			},
+		},
+	}
+	other := taskBillingOther(task)
+	assert.Equal(t, 0.8, other["group_ratio"])
+	assert.Equal(t, 0.5, other["group_model_ratio"])
+
+	// When GroupModelRatio is 1.0, it should not be logged
+	task.PrivateData.BillingContext.GroupModelRatio = 1.0
+	other1 := taskBillingOther(task)
+	assert.Nil(t, other1["group_model_ratio"])
+
+	// When GroupModelRatio is 0.0 (free model), it should be logged
+	task.PrivateData.BillingContext.GroupModelRatio = 0.0
+	other0 := taskBillingOther(task)
+	assert.Equal(t, 0.0, other0["group_model_ratio"])
+}
+
+func TestRecalculateTaskQuotaByTokens_WithGroupModelRatio(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 40, 40, 40
+	const initQuota, preConsumed = 10000, 5000
+	const tokenRemain = 8000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-tokens-ratio", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Properties.OriginModelName = "gpt-4o"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{
+		OriginModelName:    "gpt-4o",
+		ModelRatio:         2.0,
+		GroupRatio:         0.8,
+		GroupModelRatio:    0.5,
+		HasGroupModelRatio: true,
+	}
+
+	// totalTokens = 1000
+	// expected actualQuota = 1000 * 2.0 * (0.8 * 0.5) = 800
+	// preConsumed was 5000, so refund should be 5000 - 800 = 4200
+	RecalculateTaskQuotaByTokens(ctx, task, 1000)
+
+	assert.Equal(t, 800, task.Quota)
+	assert.Equal(t, initQuota+(preConsumed-800), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-800), getTokenRemainQuota(t, tokenID))
+
+	// Test 0.0 ratio (free model, actualQuota <= 0 is no-op as tested in TestRecalculate_ZeroActualQuota_NoOp)
+	taskFree := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	taskFree.Properties.OriginModelName = "free-model"
+	taskFree.PrivateData.BillingContext = &model.TaskBillingContext{
+		OriginModelName:    "free-model",
+		ModelRatio:         2.0,
+		GroupRatio:         0.8,
+		GroupModelRatio:    0.0,
+		HasGroupModelRatio: true,
+	}
+	RecalculateTaskQuotaByTokens(ctx, taskFree, 1000)
+	// Because actualQuota calculates to 0, RecalculateTaskQuota early returns (task.Quota remains preConsumed)
+	assert.Equal(t, preConsumed, taskFree.Quota)
+}

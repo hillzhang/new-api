@@ -3,6 +3,7 @@ package ratio_setting
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -74,6 +75,10 @@ func GetGroupRatioCopy() map[string]float64 {
 	return groupRatioMap.ReadAll()
 }
 
+func GetGroupModelRatioCopy() map[string]map[string]float64 {
+	return groupModelRatioMap.ReadAll()
+}
+
 func ContainsGroupRatio(name string) bool {
 	_, ok := groupRatioMap.Get(name)
 	return ok
@@ -128,14 +133,22 @@ func UpdateGroupModelRatioByJSONString(jsonStr string) error {
 // It prioritizes exact match, then longest-prefix wildcard match (e.g. "gpt-4*"), then "*".
 // If not found, it returns 1.0.
 func GetGroupModelRatio(group, modelName string) float64 {
+	ratio, _ := GetGroupModelRatioWithStatus(group, modelName)
+	return ratio
+}
+
+// GetGroupModelRatioWithStatus returns the model ratio and whether a rule matched.
+func GetGroupModelRatioWithStatus(group, modelName string) (float64, bool) {
 	groupModels, ok := groupModelRatioMap.Get(group)
 	if !ok || len(groupModels) == 0 {
-		return 1.0
+		return 1.0, false
 	}
 
+	trimmedModel := strings.TrimSpace(modelName)
+
 	// 1. Exact match
-	if ratio, found := groupModels[modelName]; found {
-		return ratio
+	if ratio, found := groupModels[trimmedModel]; found {
+		return ratio, true
 	}
 
 	// 2. Wildcard matching
@@ -144,16 +157,17 @@ func GetGroupModelRatio(group, modelName string) float64 {
 	longestMatchLen := -1
 
 	for pattern, ratio := range groupModels {
-		if pattern == "*" {
+		trimmedPattern := strings.TrimSpace(pattern)
+		if trimmedPattern == "*" {
 			if longestMatchLen < 0 {
 				wildcardMatch = ratio
 				wildcardFound = true
 			}
 			continue
 		}
-		if strings.HasSuffix(pattern, "*") {
-			prefix := strings.TrimSuffix(pattern, "*")
-			if strings.HasPrefix(modelName, prefix) && len(prefix) > longestMatchLen {
+		if strings.HasSuffix(trimmedPattern, "*") {
+			prefix := strings.TrimSuffix(trimmedPattern, "*")
+			if strings.HasPrefix(trimmedModel, prefix) && len(prefix) > longestMatchLen {
 				longestMatchLen = len(prefix)
 				wildcardMatch = ratio
 				wildcardFound = true
@@ -162,10 +176,10 @@ func GetGroupModelRatio(group, modelName string) float64 {
 	}
 
 	if wildcardFound {
-		return wildcardMatch
+		return wildcardMatch, true
 	}
 
-	return 1.0
+	return 1.0, false
 }
 
 func CheckGroupRatio(jsonStr string) error {
@@ -175,7 +189,7 @@ func CheckGroupRatio(jsonStr string) error {
 		return err
 	}
 	for name, ratio := range checkGroupRatio {
-		if ratio < 0 {
+		if ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
 			return errors.New("group ratio must be not less than 0: " + name)
 		}
 	}
@@ -190,7 +204,7 @@ func CheckGroupModelRatio(jsonStr string) error {
 	}
 	for group, models := range checkGroupModelRatio {
 		for modelName, ratio := range models {
-			if ratio < 0 {
+			if ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
 				return errors.New("group model ratio must be not less than 0: " + group + " -> " + modelName)
 			}
 		}

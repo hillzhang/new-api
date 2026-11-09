@@ -115,11 +115,26 @@ type TaskPrivateData struct {
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
 	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	GroupRatio         float64            `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio         float64            `json:"model_ratio,omitempty"`       // 模型倍率
+	GroupModelRatio    float64            `json:"group_model_ratio,omitempty"` // 分组模型倍率
+	HasGroupModelRatio bool               `json:"has_group_model_ratio,omitempty"`
+	OtherRatios        map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+}
+
+func (bc *TaskBillingContext) EffectiveGroupRatio() float64 {
+	if bc == nil {
+		return 1.0
+	}
+	if bc.HasGroupModelRatio {
+		return bc.GroupRatio * bc.GroupModelRatio
+	}
+	if bc.GroupModelRatio > 0 {
+		return bc.GroupRatio * bc.GroupModelRatio
+	}
+	return bc.GroupRatio
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

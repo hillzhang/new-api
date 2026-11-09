@@ -400,7 +400,8 @@ export function GroupModelRatioVisualEditor(
         .filter(
           (m) =>
             Array.isArray(m.enable_groups) &&
-            m.enable_groups.includes(groupName)
+            (m.enable_groups.includes(groupName) ||
+              m.enable_groups.includes('all'))
         )
         .map((m) => m.model_name)
       if (matched.length > 0) {
