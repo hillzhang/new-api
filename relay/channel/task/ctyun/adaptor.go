@@ -35,15 +35,19 @@ type CtyunVideoRequest struct {
 
 // CtyunVideoMedia 描述天翼云媒体输入
 type CtyunVideoMedia struct {
-	Type string `json:"type"` // reference_image, first_frame, last_frame, driving_audio, first_clip
-	URL  string `json:"url"`
+	Type           string `json:"type"`                      // reference_image, reference_video, reference_audio, first_frame, last_frame, driving_audio, first_clip, file, link
+	URL            string `json:"url"`
+	ReferenceVoice string `json:"reference_voice,omitempty"` // 音色参考音频 URL (wan2.7-r2v)
 }
 
 // CtyunVideoInput 视频输入参数
 type CtyunVideoInput struct {
 	Prompt         string            `json:"prompt,omitempty"`          // 文本提示词
 	Media          []CtyunVideoMedia `json:"media,omitempty"`           // 媒体素材数组
+	ReferenceURLs  []string          `json:"reference_urls,omitempty"`  // 参考素材URL数组 (wan2.6-r2v)
 	ImgURL         string            `json:"img_url,omitempty"`         // 兼容老版本图生视频
+	ImageURL       string            `json:"image_url,omitempty"`       // 角色照片URL（animate-mix）
+	VideoURL       string            `json:"video_url,omitempty"`       // 表演视频URL（animate-mix）
 	FirstFrameURL  string            `json:"first_frame_url,omitempty"` // 首帧图片URL
 	LastFrameURL   string            `json:"last_frame_url,omitempty"`  // 尾帧图片URL
 	AudioURL       string            `json:"audio_url,omitempty"`       // 音频URL
@@ -56,6 +60,10 @@ type CtyunVideoParameters struct {
 	Ratio        string `json:"ratio,omitempty"`         // 宽高比: 16:9/9:16/1:1等 (HappyHorse)
 	Size         string `json:"size,omitempty"`          // 尺寸: 如 "1920*1080"
 	Duration     int    `json:"duration,omitempty"`      // 时长: 2-15秒
+	Mode         string `json:"mode,omitempty"`          // 服务模式: wan-std / wan-pro (animate-mix)
+	ShotType     string `json:"shot_type,omitempty"`     // 镜头类型: single / multi (wan2.6-r2v)
+	AudioSetting string `json:"audio_setting,omitempty"` // 音频控制: origin / auto (happyhorse-video-edit)
+	CheckImage   *bool  `json:"check_image,omitempty"`   // 是否进行图像检测 (animate-mix)
 	PromptExtend bool   `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
 	Watermark    bool   `json:"watermark,omitempty"`     // 是否添加水印
 	Audio        *bool  `json:"audio,omitempty"`         // 是否生成有声视频
@@ -88,8 +96,21 @@ type CtyunVideoOutput struct {
 	OrigPrompt    string `json:"orig_prompt,omitempty"`
 	ActualPrompt  string `json:"actual_prompt,omitempty"`
 	VideoURL      string `json:"video_url,omitempty"`
-	Code          string `json:"code,omitempty"`
-	Message       string `json:"message,omitempty"`
+	Results       *struct {
+		VideoURL string `json:"video_url,omitempty"`
+	} `json:"results,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func (o CtyunVideoOutput) GetVideoURL() string {
+	if o.VideoURL != "" {
+		return o.VideoURL
+	}
+	if o.Results != nil {
+		return o.Results.VideoURL
+	}
+	return ""
 }
 
 // CtyunUsage 使用统计
@@ -118,12 +139,54 @@ func isHappyHorseR2V(model string) bool {
 	return strings.HasPrefix(model, "happyhorse") && strings.Contains(model, "r2v")
 }
 
+func isHappyHorseVideoEdit(model string) bool {
+	return strings.HasPrefix(model, "happyhorse") && strings.Contains(model, "video-edit")
+}
+
 func isHappyHorse(model string) bool {
 	return strings.HasPrefix(model, "happyhorse")
 }
 
 func isWanx27(model string) bool {
 	return strings.HasPrefix(model, "wan2.7")
+}
+
+func isWan30(model string) bool {
+	return strings.HasPrefix(model, "wan3.0")
+}
+
+func isWanR2V(model string) bool {
+	return strings.HasPrefix(model, "wan") && strings.Contains(model, "-r2v")
+}
+
+func isWan26R2V(model string) bool {
+	return strings.HasPrefix(model, "wan2.6-r2v")
+}
+
+func isWanKF2V(model string) bool {
+	return strings.HasPrefix(model, "wan") && strings.Contains(model, "kf2v")
+}
+
+func isWanAnimateMix(model string) bool {
+	return strings.HasPrefix(model, "wan") && strings.Contains(model, "animate-mix")
+}
+
+func isVideoMediaURL(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(lower, "data:video/") ||
+		strings.Contains(lower, ".mp4") ||
+		strings.Contains(lower, ".mov") ||
+		strings.Contains(lower, ".webm") ||
+		strings.Contains(lower, ".avi")
+}
+
+func isAudioMediaURL(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(lower, "data:audio/") ||
+		strings.Contains(lower, ".mp3") ||
+		strings.Contains(lower, ".wav") ||
+		strings.Contains(lower, ".aac") ||
+		strings.Contains(lower, ".m4a")
 }
 
 func firstNonEmpty(values ...string) string {
@@ -285,6 +348,9 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if info != nil && (isWanAnimateMix(info.UpstreamModelName) || isWanAnimateMix(info.OriginModelName)) {
+		return fmt.Sprintf("%s/v1/services/aigc/image2video/video-synthesis", a.baseURL), nil
+	}
 	return fmt.Sprintf("%s/v1/services/aigc/video-generation/video-synthesis", a.baseURL), nil
 }
 
@@ -397,6 +463,104 @@ func (a *TaskAdaptor) convertToCtyunRequest(info *relaycommon.RelayInfo, req rel
 		}
 		ctyunReq.Parameters.Resolution = resolution
 		ctyunReq.Parameters.Ratio = ratio
+	} else if isHappyHorseVideoEdit(upstreamModel) {
+		// HappyHorse 视频编辑：1 个源视频 + 0~5 张参考图
+		videoURL := strings.TrimSpace(req.InputReference)
+		var refImages []string
+		collectMedia := func(raw string) {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				return
+			}
+			lower := strings.ToLower(trimmed)
+			if videoURL == "" && (strings.Contains(lower, ".mp4") || strings.Contains(lower, ".mov") || strings.Contains(lower, ".webm") || strings.HasPrefix(lower, "data:video/")) {
+				videoURL = trimmed
+			} else {
+				refImages = append(refImages, trimmed)
+			}
+		}
+		collectMedia(req.Image)
+		for _, img := range req.Images {
+			collectMedia(img)
+		}
+		if videoURL != "" {
+			ctyunReq.Input.Media = append(ctyunReq.Input.Media, CtyunVideoMedia{
+				Type: "video",
+				URL:  videoURL,
+			})
+		}
+		if len(refImages) > 5 {
+			refImages = refImages[:5]
+		}
+		for _, img := range refImages {
+			ctyunReq.Input.Media = append(ctyunReq.Input.Media, CtyunVideoMedia{
+				Type: "reference_image",
+				URL:  img,
+			})
+		}
+		ctyunReq.Parameters.Resolution = resolution
+	} else if isWan26R2V(upstreamModel) {
+		// 万相 2.6 参考生视频：使用 input.reference_urls 与 parameters.size
+		if req.Size != "" && strings.Contains(req.Size, "*") {
+			ctyunReq.Parameters.Size = req.Size
+		} else if resolution == "1080P" {
+			ctyunReq.Parameters.Size = "1920*1080"
+		} else {
+			ctyunReq.Parameters.Size = "1280*720"
+		}
+		for _, candidate := range append(append([]string{req.Image}, req.Images...), req.InputReference) {
+			if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+				ctyunReq.Input.ReferenceURLs = append(ctyunReq.Input.ReferenceURLs, trimmed)
+			}
+		}
+	} else if isWan30(upstreamModel) || isWanR2V(upstreamModel) {
+		// 万相 3.0（四模态全能）及 2.6/2.7 参考生视频
+		ctyunReq.Parameters.Resolution = resolution
+		if strings.Contains(req.Size, ":") {
+			ctyunReq.Parameters.Ratio = ratio
+		}
+		appendMultimodal := func(raw string) {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				return
+			}
+			if isVideoMediaURL(trimmed) {
+				ctyunReq.Input.Media = append(ctyunReq.Input.Media, CtyunVideoMedia{Type: "reference_video", URL: trimmed})
+			} else if isAudioMediaURL(trimmed) {
+				ctyunReq.Input.Media = append(ctyunReq.Input.Media, CtyunVideoMedia{Type: "reference_audio", URL: trimmed})
+			} else {
+				ctyunReq.Input.Media = append(ctyunReq.Input.Media, CtyunVideoMedia{Type: "reference_image", URL: trimmed})
+			}
+		}
+		appendMultimodal(req.Image)
+		for _, img := range req.Images {
+			appendMultimodal(img)
+		}
+		appendMultimodal(req.InputReference)
+	} else if isWanKF2V(upstreamModel) {
+		// 万相首尾帧生视频
+		ctyunReq.Parameters.Resolution = resolution
+		ctyunReq.Input.FirstFrameURL = firstTaskImage(req)
+		ctyunReq.Input.LastFrameURL = secondTaskImage(req)
+	} else if isWanAnimateMix(upstreamModel) {
+		// 万相视频换人（角色照片 + 表演视频）
+		ctyunReq.Parameters.Mode = "wan-std"
+		if vid := strings.TrimSpace(req.InputReference); vid != "" && isVideoMediaURL(vid) {
+			ctyunReq.Input.VideoURL = vid
+		}
+		var photoURL string
+		for _, candidate := range append([]string{req.Image}, req.Images...) {
+			trimmed := strings.TrimSpace(candidate)
+			if trimmed == "" {
+				continue
+			}
+			if isVideoMediaURL(trimmed) && ctyunReq.Input.VideoURL == "" {
+				ctyunReq.Input.VideoURL = trimmed
+			} else if !isVideoMediaURL(trimmed) && photoURL == "" {
+				photoURL = trimmed
+			}
+		}
+		ctyunReq.Input.ImageURL = photoURL
 	} else if isWanx27(upstreamModel) {
 		// 万相 2.7 系列
 		ctyunReq.Parameters.Resolution = resolution
@@ -423,7 +587,14 @@ func (a *TaskAdaptor) convertToCtyunRequest(info *relaycommon.RelayInfo, req rel
 			if req.Size != "" && strings.Contains(req.Size, "*") {
 				ctyunReq.Parameters.Size = req.Size
 			} else {
-				ctyunReq.Parameters.Size = "1920*1080"
+				switch resolution {
+				case "480P":
+					ctyunReq.Parameters.Size = "832*480"
+				case "720P":
+					ctyunReq.Parameters.Size = "1280*720"
+				default:
+					ctyunReq.Parameters.Size = "1920*1080"
+				}
 			}
 		} else {
 			ctyunReq.Parameters.Resolution = resolution
@@ -448,6 +619,10 @@ func (a *TaskAdaptor) convertToCtyunRequest(info *relaycommon.RelayInfo, req rel
 		if metadataBytes, err := common.Marshal(req.Metadata); err == nil {
 			_ = common.Unmarshal(metadataBytes, ctyunReq)
 		}
+	}
+
+	if isHappyHorseVideoEdit(upstreamModel) && len(ctyunReq.Input.Media) == 0 {
+		return nil, fmt.Errorf("%s requires source video input", upstreamModel)
 	}
 
 	// 安全校验：防止 metadata 注入非法负数或零覆盖时长
@@ -489,6 +664,11 @@ func ProcessCtyunOtherRatios(ctyunReq *CtyunVideoRequest) (map[string]float64, e
 			"720P":  1,
 			"1080P": 1.6 / 0.9,
 		},
+		"happyhorse-1.0-t2v-20260618": {
+			"480P":  1,
+			"720P":  1,
+			"1080P": 1.6 / 0.9,
+		},
 		"happyhorse-1.0-i2v": {
 			"480P":  1,
 			"720P":  1,
@@ -509,8 +689,28 @@ func ProcessCtyunOtherRatios(ctyunReq *CtyunVideoRequest) (map[string]float64, e
 			"720P":  1,
 			"1080P": 1.6 / 0.9,
 		},
+		"happyhorse-1.0-video-edit": {
+			"480P":  1,
+			"720P":  1,
+			"1080P": 1.6 / 0.9,
+		},
+		"happyhorse-1.0-video-edit-20260618": {
+			"480P":  1,
+			"720P":  1,
+			"1080P": 1.6 / 0.9,
+		},
 
 		// 阿里万相原生定价倍率
+		"wan3.0-video": {
+			"480P":  1,
+			"720P":  2,
+			"1080P": 4,
+		},
+		"wan3.0-video-prime": {
+			"480P":  1,
+			"720P":  2,
+			"1080P": 4,
+		},
 		"wan2.7-i2v": {
 			"720P":  1,
 			"1080P": 1 / 0.6,
@@ -519,9 +719,33 @@ func ProcessCtyunOtherRatios(ctyunReq *CtyunVideoRequest) (map[string]float64, e
 			"720P":  1,
 			"1080P": 1 / 0.6,
 		},
+		"wan2.7-r2v": {
+			"720P":  1,
+			"1080P": 1 / 0.6,
+		},
 		"wan2.6-i2v": {
 			"720P":  1,
 			"1080P": 1 / 0.6,
+		},
+		"wan2.6-i2v-flash": {
+			"720P":  1,
+			"1080P": 0.5 / 0.3,
+		},
+		"wan2.6-t2v": {
+			"720P":  1,
+			"1080P": 1 / 0.6,
+		},
+		"wan2.6-r2v": {
+			"720P":  1,
+			"1080P": 1 / 0.6,
+		},
+		"wan2.6-r2v-flash": {
+			"720P":  1,
+			"1080P": 0.5 / 0.3,
+		},
+		"wan2.2-animate-mix": {
+			"720P":  1,
+			"1080P": 1,
 		},
 		"wan2.5-t2v-preview": {
 			"480P":  1,
@@ -549,21 +773,20 @@ func ProcessCtyunOtherRatios(ctyunReq *CtyunVideoRequest) (map[string]float64, e
 			"1080P": 4.8,
 		},
 		"wan2.2-i2v-flash": {
-			"480P": 1,
-			"720P": 2,
+			"480P":  1,
+			"720P":  2,
+			"1080P": 4.8,
 		},
 		"wan2.2-s2v": {
 			"480P": 1,
 			"720P": 0.9 / 0.5,
 		},
 		"wanx2.1-i2v-plus": {
-			"480P":  1,
-			"720P":  2,
-			"1080P": 0.7 / 0.14,
+			"720P": 1,
 		},
 		"wanx2.1-i2v-turbo": {
 			"480P": 1,
-			"720P": 2,
+			"720P": 1,
 		},
 	}
 
@@ -585,6 +808,17 @@ func ProcessCtyunOtherRatios(ctyunReq *CtyunVideoRequest) (map[string]float64, e
 		if ratio, ok := otherRatio[resolution]; ok {
 			otherRatios[fmt.Sprintf("resolution-%s", resolution)] = ratio
 		}
+	}
+
+	// wan2.6 Flash 系列（i2v-flash / r2v-flash）：无声（audio=false）价格为有声（默认）的一半
+	if (ctyunReq.Model == "wan2.6-i2v-flash" || ctyunReq.Model == "wan2.6-r2v-flash") &&
+		ctyunReq.Parameters.Audio != nil && !*ctyunReq.Parameters.Audio {
+		otherRatios["audio"] = 0.5
+	}
+
+	// wan2.2-animate-mix：专业模式 wan-pro (0.90/s) 为标准模式 wan-std (0.60/s) 的 1.5 倍
+	if ctyunReq.Model == "wan2.2-animate-mix" && strings.EqualFold(ctyunReq.Parameters.Mode, "wan-pro") {
+		otherRatios["mode"] = 0.9 / 0.6
 	}
 
 	return otherRatios, nil
@@ -710,7 +944,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusInProgress
 	case "SUCCEEDED":
 		taskResult.Status = model.TaskStatusSuccess
-		taskResult.Url = ctyunResp.Output.VideoURL
+		taskResult.Url = ctyunResp.Output.GetVideoURL()
 	case "FAILED", "CANCELED", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
 		if ctyunResp.Message != "" {
@@ -743,7 +977,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	openAIResp.CreatedAt = task.CreatedAt
 	openAIResp.CompletedAt = task.UpdatedAt
 
-	openAIResp.SetMetadata("url", ctyunResp.Output.VideoURL)
+	openAIResp.SetMetadata("url", ctyunResp.Output.GetVideoURL())
 
 	if ctyunResp.Code != "" {
 		openAIResp.Error = &dto.OpenAIVideoError{
