@@ -105,6 +105,7 @@ export function getChannelTypeIcon(type: number): string {
     54: 'Doubao', // DoubaoVideo
     61: 'Doubao', // WangsuVideo
     62: 'Ali', // CtyunVideo
+    63: 'Doubao', // CtyunDoubaoVideo
     56: 'Replicate', // Replicate
 
     // Tools & Platforms

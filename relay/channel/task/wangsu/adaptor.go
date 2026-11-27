@@ -102,8 +102,64 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
+// 放行 seconds/duration == -1（豆包智能自动时长），其余校验与 ValidateBasicTaskRequest 对齐。
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	contentType := c.GetHeader("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	}
+
+	var req relaycommon.TaskSubmitReq
+	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+
+	// 捕获并合并顶层扁平参数到 req.Metadata，支持无 metadata 嵌套的 REST 调用
+	var rawBody map[string]any
+	if err := common.UnmarshalBodyReusable(c, &rawBody); err == nil && rawBody != nil {
+		nativeKeys := []string{
+			"seed", "watermark", "draft", "return_last_frame", "first_frame", "last_frame",
+			"aspect_ratio", "eca_aspect_ratio", "eca_audio", "audio", "eca_voice", "voice",
+			"eca_mode", "mode", "eca_multi_shot", "multi_shot", "tools", "eca_tools",
+			"video_reference", "eca_video_reference", "audio_reference", "eca_audio_reference",
+			"input_reference", "execution_expires_after", "service_tier", "callback_url",
+		}
+		for _, key := range nativeKeys {
+			if val, exists := rawBody[key]; exists && val != nil {
+				if req.Metadata == nil {
+					req.Metadata = make(map[string]interface{})
+				}
+				if _, set := req.Metadata[key]; !set {
+					req.Metadata[key] = val
+				}
+			}
+		}
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("prompt is required"), "invalid_request", http.StatusBadRequest)
+	}
+
+	seconds := req.Duration
+	if seconds == 0 && req.Seconds != "" {
+		seconds, _ = strconv.Atoi(req.Seconds)
+	}
+	if seconds < -1 || seconds > relaycommon.MaxTaskDurationSeconds {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("seconds must be -1 or between 1 and %d", relaycommon.MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest)
+	}
+
+	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
+		req.Images = []string{req.Image}
+	}
+
+	if info != nil {
+		if info.TaskRelayInfo == nil {
+			info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+		}
+		info.Action = constant.TaskActionGenerate
+	}
+	c.Set("task_request", req)
+	return nil
 }
 
 // BuildRequestURL constructs the upstream URL: POST ${BASE_URL}/videos
@@ -125,9 +181,12 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	if err != nil {
 		return nil
 	}
-	hasVideo := hasVideoInMetadata(req.Metadata)
+	hasVideo := hasVideoInReq(&req)
 	resolution := extractResolution(&req)
 	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
+	if !ok && info.ChannelMeta != nil && info.UpstreamModelName != "" && info.UpstreamModelName != info.OriginModelName {
+		ratio, ok = GetVideoInputRatio(info.UpstreamModelName, resolution, hasVideo)
+	}
 	if !ok || ratio == 1.0 {
 		return nil
 	}
@@ -200,6 +259,16 @@ var audioExtensions = map[string]bool{
 	".midi": true,
 }
 
+var imageExtensions = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+	".webp": true,
+	".bmp":  true,
+	".gif":  true,
+	".tiff": true,
+}
+
 func getURLExtension(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -211,18 +280,35 @@ func getURLExtension(rawURL string) string {
 	return strings.ToLower(path.Ext(rawURL))
 }
 
+func isImageURL(rawURL string) bool {
+	if strings.HasPrefix(rawURL, "data:image/") {
+		return true
+	}
+	ext := getURLExtension(rawURL)
+	return imageExtensions[ext]
+}
+
 func isAudioURL(rawURL string) bool {
+	if strings.HasPrefix(rawURL, "data:audio/") {
+		return true
+	}
 	ext := getURLExtension(rawURL)
 	return audioExtensions[ext]
 }
 
 func isVideoURL(rawURL string) bool {
+	if strings.HasPrefix(rawURL, "data:video/") {
+		return true
+	}
+	if isImageURL(rawURL) || isAudioURL(rawURL) {
+		return false
+	}
 	ext := getURLExtension(rawURL)
 	if videoExtensions[ext] {
 		return true
 	}
 	lower := strings.ToLower(rawURL)
-	if strings.Contains(lower, "video") && !strings.Contains(lower, "audio") {
+	if strings.Contains(lower, "video") && !strings.Contains(lower, "audio") && !strings.Contains(lower, "image") {
 		return true
 	}
 	return false
@@ -342,6 +428,62 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	return false
 }
 
+func isVideoInputReference(inputRef any) bool {
+	if inputRef == nil {
+		return false
+	}
+	switch v := inputRef.(type) {
+	case string:
+		return isVideoURL(v)
+	case map[string]any:
+		if vStr, ok := v["video"].(string); ok && isVideoURL(vStr) {
+			return true
+		}
+		if uStr, ok := v["url"].(string); ok && isVideoURL(uStr) {
+			return true
+		}
+		return false
+	case []string:
+		for _, s := range v {
+			if isVideoURL(s) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if isVideoInputReference(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasVideoInReq(req *relaycommon.TaskSubmitReq) bool {
+	if req == nil {
+		return false
+	}
+	if req.InputReference != "" && isVideoURL(req.InputReference) {
+		return true
+	}
+	for _, img := range req.Images {
+		if isVideoURL(img) {
+			return true
+		}
+	}
+	if req.Image != "" && isVideoURL(req.Image) {
+		return true
+	}
+	if req.Metadata != nil {
+		if inputRef, ok := req.Metadata["input_reference"]; ok && inputRef != nil {
+			if isVideoInputReference(inputRef) {
+				return true
+			}
+		}
+	}
+	return hasVideoInMetadata(req.Metadata)
+}
+
 // BuildRequestBody converts request into Wangsu /videos specific format.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	req, err := relaycommon.GetTaskRequest(c)
@@ -384,30 +526,54 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		r.Seconds = lo.ToPtr(dto.IntValue(req.Duration))
 	}
 
-	// 3. 处理参考图输入（统一封装为网宿原生 input_reference 数组）
+	// 3. 处理参考图 / 视频输入（支持 input_reference 中传入视频或图片）
 	if req.InputReference != "" {
-		r.InputReference = []map[string]any{
-			{"image": req.InputReference},
+		if isVideoURL(req.InputReference) {
+			r.EcaVideoReference = append(r.EcaVideoReference, map[string]any{"video": req.InputReference})
+		} else {
+			r.InputReference = []map[string]any{
+				{"image": req.InputReference},
+			}
 		}
 	} else if req.HasImage() {
 		var refs []map[string]any
 		for _, img := range req.Images {
-			if strings.TrimSpace(img) != "" {
-				refs = append(refs, map[string]any{"image": strings.TrimSpace(img)})
+			trimmed := strings.TrimSpace(img)
+			if trimmed == "" {
+				continue
+			}
+			if isVideoURL(trimmed) {
+				r.EcaVideoReference = append(r.EcaVideoReference, map[string]any{"video": trimmed})
+			} else {
+				refs = append(refs, map[string]any{"image": trimmed})
 			}
 		}
 		if len(refs) > 0 {
 			r.InputReference = refs
 		}
 	} else if strings.TrimSpace(req.Image) != "" {
-		r.InputReference = []map[string]any{
-			{"image": strings.TrimSpace(req.Image)},
+		trimmed := strings.TrimSpace(req.Image)
+		if isVideoURL(trimmed) {
+			r.EcaVideoReference = append(r.EcaVideoReference, map[string]any{"video": trimmed})
+		} else {
+			r.InputReference = []map[string]any{
+				{"image": trimmed},
+			}
 		}
 	}
 
-	// 5. 解析透传 Metadata
+	// 5. 解析透传 Metadata（先剔除支持多态简写的字段，避免 UnmarshalMetadata 因类型不匹配失败）
 	if req.Metadata != nil {
-		if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
+		filteredMeta := make(map[string]interface{}, len(req.Metadata))
+		for k, v := range req.Metadata {
+			switch k {
+			case "eca_video_reference", "eca_audio_reference", "input_reference", "eca_tools":
+				continue
+			default:
+				filteredMeta[k] = v
+			}
+		}
+		if err := taskcommon.UnmarshalMetadata(filteredMeta, &r); err != nil {
 			return nil, errors.Wrap(err, "unmarshal metadata failed")
 		}
 		// 如果 metadata 显式覆盖了 size，优先使用
@@ -431,24 +597,39 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		if lf, ok := req.Metadata["last_frame"].(string); ok && lf != "" && r.EcaLastFrame == "" {
 			r.EcaLastFrame = lf
 		}
-		// 参考输入（多参考图）：直接透传 input_reference，智能规整为标准 [{"image": "url"}] 数组
+		// 参考输入（多参考图/视频）：直接透传 input_reference，若是视频则转入 eca_video_reference，若是图片则智能规整为标准 [{"image": "url"}] 数组
 		if inputRefRaw, ok := req.Metadata["input_reference"]; ok && inputRefRaw != nil {
-			if refs := parseInputReference(inputRefRaw); len(refs) > 0 {
-				r.InputReference = refs
+			if isVideoInputReference(inputRefRaw) {
+				if refs := parseVideoReference(inputRefRaw); len(refs) > 0 {
+					r.EcaVideoReference = append(r.EcaVideoReference, refs...)
+				}
+			} else {
+				if refs := parseInputReference(inputRefRaw); len(refs) > 0 {
+					r.InputReference = refs
+				}
 			}
 		}
-		// 视频参考兼容：若 eca_video_reference 尚未设置，检查 video_reference / video
-		if len(r.EcaVideoReference) == 0 {
-			if vRefRaw, ok := req.Metadata["video_reference"]; ok && vRefRaw != nil {
-				r.EcaVideoReference = parseVideoReference(vRefRaw)
-			} else if vRefRaw, ok := req.Metadata["video"]; ok && vRefRaw != nil {
-				r.EcaVideoReference = parseVideoReference(vRefRaw)
+		// 视频参考兼容：支持 eca_video_reference / video_reference / video（兼容字符串、单对象、数组）
+		for _, key := range []string{"eca_video_reference", "video_reference", "video"} {
+			if vRefRaw, ok := req.Metadata[key]; ok && vRefRaw != nil {
+				if refs := parseVideoReference(vRefRaw); len(refs) > 0 {
+					r.EcaVideoReference = refs
+					break
+				}
 			}
 		}
-		// 音频参考兼容：支持 audio_reference -> eca_audio_reference
-		if len(r.EcaAudioReference) == 0 {
-			if aRefRaw, ok := req.Metadata["audio_reference"]; ok && aRefRaw != nil {
-				r.EcaAudioReference = parseAudioReference(aRefRaw)
+		// 音频参考兼容：支持 eca_audio_reference / audio_reference / 非布尔的 audio
+		for _, key := range []string{"eca_audio_reference", "audio_reference", "audio"} {
+			if aRefRaw, ok := req.Metadata[key]; ok && aRefRaw != nil {
+				if key == "audio" {
+					if _, isBool := aRefRaw.(bool); isBool || parseBoolPtr(aRefRaw) != nil {
+						continue
+					}
+				}
+				if refs := parseAudioReference(aRefRaw); len(refs) > 0 {
+					r.EcaAudioReference = refs
+					break
+				}
 			}
 		}
 		// 模式兼容：支持 mode -> eca_mode
@@ -472,18 +653,24 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 				r.ReturnLastFrame = b
 			}
 		}
-		// 工具兼容：支持 tools -> eca_tools
+		// 工具兼容：支持 eca_tools / tools
 		if len(r.EcaTools) == 0 {
-			if tList, ok := req.Metadata["tools"].([]map[string]any); ok && len(tList) > 0 {
-				r.EcaTools = tList
-			} else if tRaw, ok := req.Metadata["tools"].([]any); ok && len(tRaw) > 0 {
-				var tools []map[string]any
-				for _, item := range tRaw {
-					if m, ok := item.(map[string]any); ok {
-						tools = append(tools, m)
+			for _, key := range []string{"eca_tools", "tools"} {
+				if tList, ok := req.Metadata[key].([]map[string]any); ok && len(tList) > 0 {
+					r.EcaTools = tList
+					break
+				} else if tRaw, ok := req.Metadata[key].([]any); ok && len(tRaw) > 0 {
+					var tools []map[string]any
+					for _, item := range tRaw {
+						if m, ok := item.(map[string]any); ok {
+							tools = append(tools, m)
+						}
+					}
+					if len(tools) > 0 {
+						r.EcaTools = tools
+						break
 					}
 				}
-				r.EcaTools = tools
 			}
 		}
 	}
@@ -504,6 +691,25 @@ func parseVideoReference(val any) []map[string]any {
 			}
 			return []map[string]any{{"video": trimmed}}
 		}
+	case map[string]any:
+		vid, hasVid := v["video"].(string)
+		aud, hasAud := v["audio"].(string)
+		if (hasVid && strings.TrimSpace(vid) != "") || (hasAud && strings.TrimSpace(aud) != "") {
+			return []map[string]any{v}
+		}
+	case []string:
+		var result []map[string]any
+		for _, s := range v {
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" {
+				if isAudioURL(trimmed) {
+					result = append(result, map[string]any{"audio": trimmed})
+				} else {
+					result = append(result, map[string]any{"video": trimmed})
+				}
+			}
+		}
+		return result
 	case []any:
 		var result []map[string]any
 		for _, item := range v {
@@ -543,6 +749,18 @@ func parseAudioReference(val any) []map[string]any {
 		if strings.TrimSpace(v) != "" {
 			return []map[string]any{{"audio": strings.TrimSpace(v)}}
 		}
+	case map[string]any:
+		if aud, ok := v["audio"].(string); ok && strings.TrimSpace(aud) != "" {
+			return []map[string]any{v}
+		}
+	case []string:
+		var result []map[string]any
+		for _, s := range v {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				result = append(result, map[string]any{"audio": trimmed})
+			}
+		}
+		return result
 	case []any:
 		var result []map[string]any
 		for _, item := range v {
@@ -718,20 +936,25 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
 		// 解析上游返回的真实 Token 消耗（优先通用 usage，兼容 eca_video_usage）
-		if resTask.Usage != nil && resTask.Usage.TotalTokens > 0 {
+		if resTask.Usage != nil && (resTask.Usage.TotalTokens > 0 || resTask.Usage.CompletionTokens > 0) {
 			taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 			taskResult.TotalTokens = resTask.Usage.TotalTokens
 		} else {
 			taskResult.CompletionTokens = resTask.EcaVideoUsage.CompletionTokens
 			taskResult.TotalTokens = resTask.EcaVideoUsage.TotalTokens
 		}
-	case "failed", "expired":
+		if taskResult.TotalTokens == 0 && taskResult.CompletionTokens > 0 {
+			taskResult.TotalTokens = taskResult.CompletionTokens
+		}
+	case "failed", "expired", "cancelled":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
 		if resTask.Error.Message != "" {
 			taskResult.Reason = resTask.Error.Message
 		} else if resTask.Status == "expired" {
 			taskResult.Reason = "task execution expired"
+		} else if resTask.Status == "cancelled" {
+			taskResult.Reason = "task cancelled"
 		} else {
 			taskResult.Reason = "task failed"
 		}
@@ -756,11 +979,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.SetProgressStr(originTask.Progress)
 
 	// 设置平台视频流代理地址，使得客户端可直接通过 /v1/videos/:task_id/content 播放和下载
-	videoURL := fmt.Sprintf("/v1/videos/%s/content", originTask.TaskID)
+	videoURL := originTask.GetResultURL()
+	if videoURL == "" {
+		videoURL = taskcommon.BuildProxyURL(originTask.TaskID)
+	}
 	openAIVideo.SetMetadata("url", videoURL)
-	if dResp.Usage != nil && dResp.Usage.TotalTokens > 0 {
+	if dResp.Usage != nil && (dResp.Usage.TotalTokens > 0 || dResp.Usage.CompletionTokens > 0) {
 		openAIVideo.SetMetadata("usage", dResp.Usage)
-	} else if dResp.EcaVideoUsage.TotalTokens > 0 {
+	} else if dResp.EcaVideoUsage.TotalTokens > 0 || dResp.EcaVideoUsage.CompletionTokens > 0 {
 		openAIVideo.SetMetadata("usage", dResp.EcaVideoUsage)
 	}
 	openAIVideo.CreatedAt = originTask.CreatedAt
@@ -770,9 +996,13 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 		openAIVideo.Model = dResp.Model
 	}
 
-	if dResp.Status == "failed" {
+	if dResp.Status == "failed" || dResp.Status == "expired" || dResp.Status == "cancelled" {
+		msg := dResp.Error.Message
+		if msg == "" {
+			msg = fmt.Sprintf("task %s", dResp.Status)
+		}
 		openAIVideo.Error = &dto.OpenAIVideoError{
-			Message: dResp.Error.Message,
+			Message: msg,
 			Code:    dResp.Error.Code,
 		}
 	}

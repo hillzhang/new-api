@@ -186,6 +186,17 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'HappyHorse and Wanx video models supported by Ctyun Video',
     },
   },
+  63: {
+    id: 63,
+    name: CHANNEL_TYPES[63],
+    icon: 'Doubao',
+    defaultBaseUrl: 'https://ai.ctaigw.cn',
+    hints: {
+      baseUrl: 'Default: https://ai.ctaigw.cn',
+      key: 'Tianyi Cloud Edge AI Gateway API Key',
+      models: 'Doubao Seedance video models supported by Tianyi Cloud (e.g. cdance2.0-0807, cdance2.5-0807)',
+    },
+  },
 }
 
 /**

@@ -1,15 +1,20 @@
 package wangsu
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // 浮点数比较辅助函数
@@ -863,5 +868,181 @@ func TestMatchPriceTable_LongestPrefixMatch(t *testing.T) {
 	// 3. 不允许短名反向吞噬长名：只传 "doubao" 应返回 false，避免随机错误计费
 	_, ok = matchPriceTable("doubao")
 	assert.False(t, ok)
+}
+
+func TestConvertToRequestPayload_PolymorphicEcaAndVideoAudioRefs(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+
+	// 1. eca_video_reference 传字符串 / eca_audio_reference 传单对象（之前会导致 UnmarshalMetadata 失败）
+	req1 := &relaycommon.TaskSubmitReq{
+		Model:  "doubao-seedance-2-0-260128",
+		Prompt: "视频风格迁移",
+		Metadata: map[string]any{
+			"eca_video_reference": "https://example.com/actor.mp4",
+			"eca_audio_reference": map[string]any{"audio": "https://example.com/bgm.mp3"},
+		},
+	}
+	payload1, err := adaptor.convertToRequestPayload(req1)
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]any{{"video": "https://example.com/actor.mp4"}}, payload1.EcaVideoReference)
+	assert.Equal(t, []map[string]any{{"audio": "https://example.com/bgm.mp3"}}, payload1.EcaAudioReference)
+
+	// 2. video_reference 传单个 map，audio_reference 传 []string
+	req2 := &relaycommon.TaskSubmitReq{
+		Model:  "doubao-seedance-2-0-260128",
+		Prompt: "单对象视频参考",
+		Metadata: map[string]any{
+			"video_reference": map[string]any{"video": "https://example.com/single.mp4"},
+			"audio_reference": []string{"https://example.com/voice.wav"},
+		},
+	}
+	payload2, err := adaptor.convertToRequestPayload(req2)
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]any{{"video": "https://example.com/single.mp4"}}, payload2.EcaVideoReference)
+	assert.Equal(t, []map[string]any{{"audio": "https://example.com/voice.wav"}}, payload2.EcaAudioReference)
+	assert.True(t, hasVideoInMetadata(req2.Metadata))
+}
+
+func TestValidateRequestAndSetAction_SecondsMinusOne(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	adaptor := &TaskAdaptor{}
+	rawJSON := `{"model":"doubao-seedance-2-0-260128","prompt":"自动时长测试","seconds":-1}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewBufferString(rawJSON))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-0-260128"}
+	taskErr := adaptor.ValidateRequestAndSetAction(c, info)
+	require.Nil(t, taskErr)
+
+	req, err := relaycommon.GetTaskRequest(c)
+	require.NoError(t, err)
+	assert.Equal(t, -1, req.Duration)
+}
+
+func TestParseTaskResult_CancelledAndEstimateBillingFallback(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info, err := adaptor.ParseTaskResult([]byte(`{"id":"video.1","status":"cancelled"}`))
+	require.NoError(t, err)
+	assert.Equal(t, model.TaskStatusFailure, info.Status)
+	assert.Equal(t, "100%", info.Progress)
+	assert.Equal(t, "task cancelled", info.Reason)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("task_request", relaycommon.TaskSubmitReq{
+		Model: "my-custom-alias",
+		Size:  "1080p",
+	})
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "my-custom-alias",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "doubao-seedance-2-5-260628"},
+	}
+	ratios := adaptor.EstimateBilling(c, relayInfo)
+	require.NotNil(t, ratios)
+	assert.True(t, almostEqual(ratios["video_input"], 77.0/70.0, 0.0001))
+}
+
+func TestValidateRequestAndSetAction_TopLevelNativeFields(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	adaptor := &TaskAdaptor{}
+	rawJSON := `{
+		"model": "doubao-seedance-2-5-260628",
+		"prompt": "顶层扁平参数注入测试",
+		"seed": 99999,
+		"watermark": false,
+		"draft": true,
+		"first_frame": "https://example.com/first.png",
+		"last_frame": "https://example.com/last.png",
+		"aspect_ratio": "16:9",
+		"eca_audio": true
+	}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewBufferString(rawJSON))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-5-260628"}
+	taskErr := adaptor.ValidateRequestAndSetAction(c, info)
+	require.Nil(t, taskErr)
+
+	req, err := relaycommon.GetTaskRequest(c)
+	require.NoError(t, err)
+	require.NotNil(t, req.Metadata)
+	assert.Equal(t, 99999, int(req.Metadata["seed"].(float64)))
+	assert.Equal(t, false, req.Metadata["watermark"])
+	assert.Equal(t, true, req.Metadata["draft"])
+	assert.Equal(t, "https://example.com/first.png", req.Metadata["first_frame"])
+	assert.Equal(t, "https://example.com/last.png", req.Metadata["last_frame"])
+	assert.Equal(t, "16:9", req.Metadata["aspect_ratio"])
+	assert.Equal(t, true, req.Metadata["eca_audio"])
+
+	payload, err := adaptor.convertToRequestPayload(&req)
+	require.NoError(t, err)
+	assert.NotNil(t, payload.Seed)
+	assert.Equal(t, 99999, int(*payload.Seed))
+	assert.NotNil(t, payload.Watermark)
+	assert.False(t, bool(*payload.Watermark))
+	assert.Equal(t, "https://example.com/first.png", payload.EcaFirstFrame)
+	assert.Equal(t, "https://example.com/last.png", payload.EcaLastFrame)
+	assert.Equal(t, "16:9", payload.EcaAspectRatio)
+	assert.NotNil(t, payload.EcaAudio)
+	assert.True(t, bool(*payload.EcaAudio))
+}
+
+func TestConvertToRequestPayload_InputReferenceWithVideoURL(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+
+	// 1. input_reference 传入 mp4 视频 URL，应智能转为 eca_video_reference 并享受视频计费折扣
+	req := &relaycommon.TaskSubmitReq{
+		Model:          "doubao-seedance-2-5-260628",
+		Prompt:         "视频生视频/续写",
+		InputReference: "https://example.com/clip.mp4",
+	}
+
+	payload, err := adaptor.convertToRequestPayload(req)
+	require.NoError(t, err)
+	assert.Nil(t, payload.InputReference)
+	require.Len(t, payload.EcaVideoReference, 1)
+	assert.Equal(t, "https://example.com/clip.mp4", payload.EcaVideoReference[0]["video"])
+
+	// 计费应判定为含视频输入
+	assert.True(t, hasVideoInReq(req))
+
+	// 2. input_reference 传入 png 图片 URL，应规整为标准图片输入
+	reqImg := &relaycommon.TaskSubmitReq{
+		Model:          "doubao-seedance-2-5-260628",
+		Prompt:         "图生视频",
+		InputReference: "https://example.com/clip.png",
+	}
+	payloadImg, err := adaptor.convertToRequestPayload(reqImg)
+	require.NoError(t, err)
+	assert.Empty(t, payloadImg.EcaVideoReference)
+	assert.NotNil(t, payloadImg.InputReference)
+	assert.False(t, hasVideoInReq(reqImg))
+}
+
+func TestConvertToOpenAIVideo_ResultURLFallback(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	originTask := &model.Task{
+		TaskID:   "task_test_123",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Data:     []byte(`{"id":"video.1","status":"completed","usage":{"total_tokens":5000}}`),
+		PrivateData: model.TaskPrivateData{
+			ResultURL: "https://my-domain.com/v1/videos/task_test_123/content",
+		},
+	}
+
+	bytesData, err := adaptor.ConvertToOpenAIVideo(originTask)
+	require.NoError(t, err)
+
+	var video dto.OpenAIVideo
+	err = json.Unmarshal(bytesData, &video)
+	require.NoError(t, err)
+	assert.Equal(t, "https://my-domain.com/v1/videos/task_test_123/content", video.Metadata["url"])
 }
 
