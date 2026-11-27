@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -54,6 +55,52 @@ func TestRequestOpenAI2AliTopP(t *testing.T) {
 			}, "qwen-plus")
 
 			assert.Equal(t, tt.want, got.TopP)
+		})
+	}
+}
+
+func TestRequestOpenAI2AliInternetSuffix(t *testing.T) {
+	tests := []struct {
+		name             string
+		model            string
+		upstreamModel    string
+		enableSearch     json.RawMessage
+		wantModel        string
+		wantEnableSearch string
+	}{
+		{
+			name:             "strips -internet suffix and enables search",
+			model:            "qwen-plus-internet",
+			upstreamModel:    "qwen-plus-internet",
+			wantModel:        "qwen-plus",
+			wantEnableSearch: "true",
+		},
+		{
+			name:             "preserves explicit enable_search=false even with -internet suffix",
+			model:            "qwen-max-internet",
+			upstreamModel:    "qwen-max-internet",
+			enableSearch:     json.RawMessage(`false`),
+			wantModel:        "qwen-max",
+			wantEnableSearch: "false",
+		},
+		{
+			name:             "normal model leaves enable_search untouched",
+			model:            "qwen-plus",
+			upstreamModel:    "qwen-plus",
+			wantModel:        "qwen-plus",
+			wantEnableSearch: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := requestOpenAI2Ali(dto.GeneralOpenAIRequest{
+				Model:        tt.model,
+				EnableSearch: tt.enableSearch,
+			}, tt.upstreamModel)
+
+			assert.Equal(t, tt.wantModel, got.Model)
+			assert.Equal(t, tt.wantEnableSearch, string(got.EnableSearch))
 		})
 	}
 }

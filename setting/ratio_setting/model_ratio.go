@@ -307,6 +307,20 @@ var defaultModelPrice = map[string]float64{
 	"MiniMax-H3-Max-image":          0.50, // Max 超额图片：0.50 元/张
 	"MiniMax-H3-Regeneration":       0.30, // 2K 再生成基准：0.30 元/秒
 	"MiniMax-H3-Regeneration-image": 0.15, // 再生成超额图片：0.15 元/张
+	// Ali Wanxiang Video (RMB/sec base price matching ProcessAliOtherRatios)
+	"wan2.7-i2v":         0.60, // 720P 基准：0.60 元/秒 (1080P: 1.00 元/秒)
+	"wan2.7-t2v":         0.60, // 720P 基准：0.60 元/秒 (1080P: 1.00 元/秒)
+	"wan2.6-i2v":         0.60, // 720P 基准：0.60 元/秒 (1080P: 1.00 元/秒)
+	"wan2.6-t2v":         0.60, // 720P 基准：0.60 元/秒 (1080P: 1.00 元/秒)
+	"wan2.5-i2v-preview": 0.30, // 480P 基准：0.30 元/秒 (720P: 0.60, 1080P: 1.00 元/秒)
+	"wan2.5-t2v-preview": 0.30, // 480P 基准：0.30 元/秒 (720P: 0.60, 1080P: 1.00 元/秒)
+	"wan2.2-i2v-flash":   0.10, // 480P 基准：0.10 元/秒 (720P: 0.20, 1080P: 0.48 元/秒)
+	"wan2.2-i2v-plus":    0.14, // 480P 基准：0.14 元/秒 (1080P: 0.70 元/秒)
+	"wan2.2-t2v-plus":    0.14, // 480P 基准：0.14 元/秒 (1080P: 0.70 元/秒)
+	"wanx2.1-i2v-plus":   0.70, // 720P 基准：0.70 元/秒
+	"wanx2.1-i2v-turbo":  0.24, // 480P/720P 统一：0.24 元/秒
+	"wanx2.1-t2v-plus":   0.70, // 720P 基准：0.70 元/秒
+	"wanx2.1-t2v-turbo":  0.24, // 480P/720P 统一：0.24 元/秒
 }
 
 var defaultAudioRatio = map[string]float64{

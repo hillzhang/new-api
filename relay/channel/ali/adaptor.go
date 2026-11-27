@@ -55,12 +55,6 @@ func aliAnthropicMessagesModelPatterns() []string {
 	})
 }
 
-var syncModels = []string{
-	"z-image",
-	"qwen-image",
-	"wan2.6",
-}
-
 func isSyncImageModel(modelName string) bool {
 	return model_setting.IsSyncImageModel(modelName)
 }
@@ -92,41 +86,57 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
+func normalizeBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	for _, suffix := range []string{"/compatible-mode/v1", "/compatible-mode", "/apps/anthropic/v1", "/apps/anthropic", "/v1"} {
+		if strings.HasSuffix(baseURL, suffix) {
+			baseURL = strings.TrimSuffix(baseURL, suffix)
+			break
+		}
+	}
+	return strings.TrimRight(baseURL, "/")
+}
+
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	baseURL := normalizeBaseURL(info.ChannelBaseUrl)
 	var fullRequestURL string
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		if supportsAliAnthropicMessages(info.UpstreamModelName) {
-			fullRequestURL = fmt.Sprintf("%s/apps/anthropic/v1/messages", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/apps/anthropic/v1/messages", baseURL)
 		} else {
-			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", baseURL)
 		}
 	default:
 		switch info.RelayMode {
 		case constant.RelayModeEmbeddings:
-			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/embeddings", info.ChannelBaseUrl)
+			if isMultimodalEmbeddingModel(info.UpstreamModelName) {
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", baseURL)
+			} else {
+				fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/embeddings", baseURL)
+			}
 		case constant.RelayModeRerank:
-			fullRequestURL = fmt.Sprintf("%s/api/v1/services/rerank/text-rerank/text-rerank", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/api/v1/services/rerank/text-rerank/text-rerank", baseURL)
 		case constant.RelayModeResponses:
-			fullRequestURL = fmt.Sprintf("%s/api/v2/apps/protocols/compatible-mode/v1/responses", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/responses", baseURL)
 		case constant.RelayModeImagesGenerations:
 			if isSyncImageModel(info.UpstreamModelName) {
-				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", baseURL)
 			} else {
-				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", info.ChannelBaseUrl)
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", baseURL)
 			}
 		case constant.RelayModeImagesEdits:
 			if isOldWanModel(info.UpstreamModelName) {
-				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image2image/image-synthesis", info.ChannelBaseUrl)
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image2image/image-synthesis", baseURL)
 			} else if isWanModel(info.UpstreamModelName) {
-				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image-generation/generation", info.ChannelBaseUrl)
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image-generation/generation", baseURL)
 			} else {
-				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
+				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", baseURL)
 			}
 		case constant.RelayModeCompletions:
-			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/completions", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/completions", baseURL)
 		default:
-			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", info.ChannelBaseUrl)
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/chat/completions", baseURL)
 		}
 	}
 
@@ -162,17 +172,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	// docs: https://bailian.console.aliyun.com/?tab=api#/api/?type=model&url=2712216
-	// fix: InternalError.Algo.InvalidParameter: The value of the enable_thinking parameter is restricted to True.
-	//if strings.Contains(request.Model, "thinking") {
-	//	request.EnableThinking = true
-	//	request.Stream = true
-	//	info.IsStream = true
-	//}
-	//// fix: ali parameter.enable_thinking must be set to false for non-streaming calls
-	//if !info.IsStream {
-	//	request.EnableThinking = false
-	//}
 
 	switch info.RelayMode {
 	default:
@@ -226,6 +225,9 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 }
 
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
+	if isMultimodalEmbeddingModel(info.UpstreamModelName) {
+		return convertToMultimodalEmbeddingRequest(request)
+	}
 	return request, nil
 }
 
@@ -260,6 +262,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			err, usage = aliImageHandler(a, c, resp, info)
 		case constant.RelayModeRerank:
 			err, usage = RerankHandler(c, resp, info)
+		case constant.RelayModeEmbeddings:
+			if isMultimodalEmbeddingModel(info.UpstreamModelName) {
+				err, usage = MultimodalEmbeddingHandler(c, resp, info)
+			} else {
+				adaptor := openai.Adaptor{}
+				usage, err = adaptor.DoResponse(c, resp, info)
+			}
 		default:
 			adaptor := openai.Adaptor{}
 			usage, err = adaptor.DoResponse(c, resp, info)

@@ -193,7 +193,7 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 }
 
 func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
-	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
+	url := fmt.Sprintf("%s/api/v1/tasks/%s", normalizeBaseURL(info.ChannelBaseUrl), taskID)
 
 	var aliResponse AliResponse
 

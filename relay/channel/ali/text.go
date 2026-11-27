@@ -1,6 +1,9 @@
 package ali
 
 import (
+	"encoding/json"
+	"strings"
+
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/samber/lo"
 )
@@ -13,6 +16,16 @@ func requestOpenAI2Ali(request dto.GeneralOpenAIRequest, upstreamModelName strin
 	modelName := upstreamModelName
 	if modelName == "" {
 		modelName = request.Model
+	}
+	if strings.HasSuffix(modelName, EnableSearchModelSuffix) {
+		trimmedModel := strings.TrimSuffix(modelName, EnableSearchModelSuffix)
+		if trimmedModel != "" {
+			modelName = trimmedModel
+			request.Model = trimmedModel
+		}
+		if len(request.EnableSearch) == 0 {
+			request.EnableSearch = json.RawMessage("true")
+		}
 	}
 	if !dto.IsQwenThinkingBudgetModel(modelName) {
 		request.ThinkingBudget = nil

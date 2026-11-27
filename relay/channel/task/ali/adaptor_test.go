@@ -170,3 +170,85 @@ func TestConvertToAliRequestWan25I2VKeepsLegacyImgURL(t *testing.T) {
 	require.Contains(t, string(body), `"img_url"`)
 	require.NotContains(t, string(body), `"media"`)
 }
+
+func TestProcessAliOtherRatios(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		resolution string
+		wantKey    string
+		wantRatio  float64
+	}{
+		{
+			name:       "wan2.7-i2v 720P",
+			model:      "wan2.7-i2v",
+			resolution: "720P",
+			wantKey:    "resolution-720P",
+			wantRatio:  1,
+		},
+		{
+			name:       "wan2.7-i2v 1080P",
+			model:      "wan2.7-i2v",
+			resolution: "1080P",
+			wantKey:    "resolution-1080P",
+			wantRatio:  1 / 0.6,
+		},
+		{
+			name:       "wan2.7-t2v 1080P",
+			model:      "wan2.7-t2v",
+			resolution: "1080P",
+			wantKey:    "resolution-1080P",
+			wantRatio:  1 / 0.6,
+		},
+		{
+			name:       "wan2.6-t2v 1080P",
+			model:      "wan2.6-t2v",
+			resolution: "1080P",
+			wantKey:    "resolution-1080P",
+			wantRatio:  1 / 0.6,
+		},
+		{
+			name:       "wan2.2-i2v-flash 1080P",
+			model:      "wan2.2-i2v-flash",
+			resolution: "1080P",
+			wantKey:    "resolution-1080P",
+			wantRatio:  4.8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ratios, err := ProcessAliOtherRatios(&AliVideoRequest{
+				Model: tt.model,
+				Parameters: &AliVideoParameters{
+					Resolution: tt.resolution,
+				},
+			})
+			require.NoError(t, err)
+			require.InDelta(t, tt.wantRatio, ratios[tt.wantKey], 1e-6)
+		})
+	}
+}
+
+func TestTaskAliNormalizeBaseURLAndMappedT2V(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    "https://dashscope.aliyuncs.com/compatible-mode/v1/",
+			UpstreamModelName: "wan2.6-t2v",
+			IsModelMapped:     true,
+		},
+	}
+	adaptor.Init(info)
+	url, err := adaptor.BuildRequestURL(info)
+	require.NoError(t, err)
+	require.Equal(t, "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis", url)
+
+	aliReq, err := adaptor.convertToAliRequest(info, relaycommon.TaskSubmitReq{
+		Model:  "custom-video",
+		Prompt: "a cat",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "wan2.6-t2v", aliReq.Model)
+	require.Equal(t, "1280*720", aliReq.Parameters.Size)
+}
